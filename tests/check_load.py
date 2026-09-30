@@ -112,6 +112,7 @@ def main():
     # ключевые команды должны существовать
     cmds = [
         "C:RDB", "C:REPDBLOCK", "C:ПОДМЕНАБЛОКА", "C:ПДБ", "C:INTEGRATE",
+        "C:RDBPICK", "C:REPDBLOCKPICK", "C:ПДБВЫБОР",
         "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK", "C:ПДБЧЕК",
         "C:RDBDIAG", "C:INTDIAG", "C:ПДБДИАГ",
         "C:RDBDUMP", "C:INTDUMP", "C:ПДБДАМП",

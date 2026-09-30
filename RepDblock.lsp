@@ -6077,14 +6077,8 @@
   ;; Снимок до запроса: по нему видно, вставил ли пользователь блок сам.
   (setq snap0 (KG-SnapshotDrawing))
 
-  ;; Рекомендуемый путь -- Enter: команда сама освободит имена и вставит
-  ;; содержимое буфера. Только в этом порядке вложенные определения
-  ;; приходят новыми: при вставке руками AutoCAD подставляет уже
-  ;; существующие определения с теми же именами.
-  (princ "\nНажмите Enter: команда освободит имена и вставит буфер сама")
-  (princ "\n(рекомендуется -- только так обновляются вложенные определения).")
-  (princ "\nЛибо выберите уже вставленный мастер-блок без суффикса варианта.")
-  (setq m (KG-PickMasterFromUser))
+  ;; Автоматический режим: блок берётся напрямую из буфера обмена (без лишних вопросов и ожидания Enter).
+  (setq m nil)
 
   ;; Режим A: техническая вставка из буфера обмена.
   (if (null m)
@@ -6273,6 +6267,58 @@
 (defun C:ПОДМЕНАБЛОКА () (C:RDB))
 (defun C:ПДБ () (C:RDB))
 (defun C:INTEGRATE () (C:RDB))
+
+;;;--- RDBPICK (REPDBLOCKPICK, ПДБВЫБОР): ручной выбор мастер-блока на чертеже ---
+(defun C:RDBPICK ( / *error* m mastername p base newiter techhandle
+                     rep snap snap0 beforedefs afterdefs fb
+                     mdl pre preren hsnap nm cln)
+  (defun *error* (m) (KG-ErrorRestore m))
+  (vl-load-com)
+  (KG-SaveVars)
+
+  (princ (strcat "\n=== Подмена по выбранному мастер-блоку (сборка "
+                 KG-VERSION ") ==="))
+  (setq snap0 (KG-SnapshotDrawing))
+  (setq m (KG-PickMasterFromUser))
+  (if (null m)
+    (princ "\nМастер-блок не выбран. Для автоматической вставки из буфера используйте команду RDB.")
+    (progn
+      (setq mastername (KG-CdrCI "eff" m))
+      (setq techhandle (KG-CdrCI "handle" m))
+      (setq p (KG-ParseBlockName mastername))
+      (setq base (nth 0 p))
+      (setq newiter (nth 1 p))
+      (if (null base)
+        (princ "\nОШИБКА: не удалось определить имя мастер-блока.")
+        (progn
+          (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
+          (KG-SayKV "Семейство" base)
+          (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+          (KG-Say "Область обработки: весь файл")
+          (setq rep (KG-Integrate_Model base newiter techhandle nil))
+          (KG-PrintIntegrationReport rep)
+          (command "_.REGEN")
+          (if KG-AUTOCLEAN
+            (progn
+              (setq cln (KG-CleanupRun))
+              (princ (strcat "\n=== ИТОГ ОЧИСТКИ: "
+                             (if (> (KG-AsNum cln 0) 0)
+                               (strcat "осталось неиспользуемых определений: "
+                                       (itoa (KG-AsNum cln 0))
+                                       ". На чертёж не влияют, снимаются повторным RDBCLEANUP или PURGE.")
+                               "чисто, лишнего не осталось")
+                             " ==="))
+            )
+          )
+        )
+      )
+    )
+  )
+  (KG-ErrorRestore nil)
+  (princ)
+)
+(defun C:REPDBLOCKPICK () (C:RDBPICK))
+(defun C:ПДБВЫБОР () (C:RDBPICK))
 
 ;; Выбор мастер-блока пользователем (Режим B).
 ;; Возврат nil (Enter без выбора) означает "использовать буфер обмена".
