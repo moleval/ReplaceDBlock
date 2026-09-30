@@ -6,7 +6,7 @@ AutoLISP + COM для AutoCAD. Команда `RDB` (алиасы: `RepDblock`, 
 вложенные определения по всему чертежу, сохраняет видимость вложенных блоков
 и не теряет суффиксы вариантов.
 
-Текущая сборка: **66**.
+Текущая сборка: **67**.
 
 ## Состав
 
@@ -23,9 +23,10 @@ AutoLISP + COM для AutoCAD. Команда `RDB` (алиасы: `RepDblock`, 
 
 ## Команды
 
-Основная — `RDB` (алиасы: `RepDblock`, `ПОДМЕНАБЛОКА`, `ПДБ`, `INTEGRATE`).
+Основная — `RDB` (алиасы: `RepDblock`, `ПОДМЕНАБЛОКА`, `ПДБ`, `INTEGRATE`). Выполняется в 1 клик через буфер обмена без лишних запросов.
 
-Остальные — диагностика и очистка:
+Остальные — подмена по выбору объекта, диагностика и очистка:
+- `RDBPICK` (алиасы: `REPDBLOCKPICK`, `ПДБВЫБОР`) — подмена по указанному на чертеже мастер-блоку;
 - `RDBCHECK` (алиасы: `INTEGRATECHECK`, `REPDBLOCKCHECK`, `ПДБЧЕК`) — скан семейства без изменений;
 - `RDBDIAG` (алиасы: `INTDIAG`, `ПДБДИАГ`) — диагностика чтения определений и вхождений чертежа;
 - `RDBDUMP` (алиасы: `INTDUMP`, `ПДБДАМП`) — свойства выбранного экземпляра;
@@ -56,9 +57,9 @@ AutoLISP, который исполняет реальный `RepDblock.lsp` с 
 загружается.
 
 ```
-python3 tests/run_tests.py         # 587 проверок
+python3 tests/run_tests.py         # 616 проверок
 python3 tests/run_space_tests.py   # 46 проверок
-python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён, 42 команды/алиаса
+python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён, 45 команд/алиасов
 python3 tools/lint_parens.py RepDblock.lsp
 python3 tools/check_arity.py RepDblock.lsp
 python3 tools/check_acad_funcs.py RepDblock.lsp

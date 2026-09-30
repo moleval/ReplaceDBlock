@@ -662,14 +662,14 @@
   (T-Ok "T1.10 не наше семейство"
         (not (KG-IsFamilyName "ABC1.02(17)Стойка" "ABC1.01")))
 
-  ;; отрицательные случаи из ТЗ
-  (T-Ok "T1.11 нет скобок"          (null (KG-ParseBlockName "ABC1.01Стойка")))
-  (T-Ok "T1.12 пустые скобки"       (null (KG-ParseBlockName "ABC1.01()Стойка")))
-  (T-Ok "T1.13 нецифровая итерация" (null (KG-ParseBlockName "ABC1.01(1x)Стойка")))
-  (T-Ok "T1.14 нет закрывающей"     (null (KG-ParseBlockName "ABC1.01(15")))
+  ;; отрицательные случаи скобочной схемы
+  (T-Ok "T1.11 нет скобок"          (null (KG-ParseParenName "ABC1.01Стойка")))
+  (T-Ok "T1.12 пустые скобки"       (null (KG-ParseParenName "ABC1.01()Стойка")))
+  (T-Ok "T1.13 нецифровая итерация" (null (KG-ParseParenName "ABC1.01(1x)Стойка")))
+  (T-Ok "T1.14 нет закрывающей"     (null (KG-ParseParenName "ABC1.01(15")))
   (T-Ok "T1.15 пустое имя"          (null (KG-ParseBlockName "")))
   (T-Ok "T1.16 nil"                 (null (KG-ParseBlockName nil)))
-  (T-Ok "T1.17 пустой base"         (null (KG-ParseBlockName "(15)Стойка")))
+  (T-Ok "T1.17 пустой base"         (null (KG-ParseParenName "(15)Стойка")))
 
   ;; последняя закрывающая скобка
   (T-EqStr "T1.18 последняя скобка" (KG-ParseIteration "A(1)(2)Стойка") "2")
@@ -914,8 +914,8 @@
         (not (member "ABC1.01(1)Стойка" PRE6)))
 
   ;; нераспознанное имя
-  (T-Ok "T6.15 мусорное имя отклонено"
-        (null (KG-BuildIntegrationMap (KG_DBGetModel) "ПРОСТОБЛОК")))
+  (T-Ok "T6.15 анонимное имя отклонено"
+        (null (KG-BuildIntegrationMap (KG_DBGetModel) "*U123" nil)))
 )
 
 ;;;---------------------------------------------------------------------------
@@ -1773,11 +1773,11 @@
   (T-Ok "T13.12 v1.5 и v1.5 -- одно и то же" (KG-IterEq "1.5" "1.5"))
   (T-Ok "T13.13 v1.5 и v1.50 -- одна итерация 50" (KG-IterEq "1.5" "1.50"))
 
-  ;; имена без версии разбирать нельзя
-  (T-Ok "T13.14 «Стойка КП50 контур» не семейство"
-        (null (KG-ParseBlockName "Стойка КП50 контур")))
-  (T-Ok "T13.15 «kps 714 в динамике» не семейство"
-        (null (KG-ParseBlockName "kps 714 в динамике")))
+  ;; имена без версии в v-схеме не распознаются как версия
+  (T-Ok "T13.14 «Стойка КП50 контур» не v-версия"
+        (null (KG-ParseVName "Стойка КП50 контур")))
+  (T-Ok "T13.15 «kps 714 в динамике» не v-версия"
+        (null (KG-ParseVName "kps 714 в динамике")))
 
   ;; сквозная интеграция на реальных именах
   (TEST-BuildRealDrawing)
@@ -3351,6 +3351,133 @@
         (KG-CdrCI "annotative" newinst))
 )
 
+;;;---------------------------------------------------------------------------
+;;; T25. УНИФИЦИРОВАННАЯ ПОДМЕНА БЕЗВЕРСИОННЫХ БЛОКОВ
+;;;---------------------------------------------------------------------------
+
+(defun TEST-BuildPlainDrawing ()
+  (setq *CLIP* nil)
+  (setq *CLIP-MASTER* nil)
+  (DB-SetDefs
+    (list
+      ;; главное определение блока без версии
+      (DB-MakeDef "Шкаф_Управления" (list "Реле_РП25" "Клеммник_КЛ10") nil)
+      ;; вложенные блоки
+      (DB-MakeDef "Реле_РП25" nil (list "Открыто" "Закрыто"))
+      (DB-MakeDef "Клеммник_КЛ10" nil nil)
+      ;; посторонний блок
+      (DB-MakeDef "Комплект КП50 v1.5" (list "Стойка КП50") nil)
+      (DB-MakeDef "Стойка КП50" nil (list "A" "B"))
+    ))
+  (DB-SetInsts
+    (list
+      (append
+        (DB-MakeInst "SH1" "Шкаф_Управления" "Шкаф_Управления"
+                     "Model" "0" (list 0.0 0.0 0.0)
+                     (list (cons "Реле_РП25" "Открыто")))
+        (list (cons "attrs" (list (cons "ПОЗИЦИЯ" "ШУ-1") (cons "НАПРЯЖЕНИЕ" "220В")))
+              (cons "dyn-props" (list (cons "Ширина" 800)))))
+      (append
+        (DB-MakeInst "SH2" "Шкаф_Управления" "Шкаф_Управления"
+                     "Model" "0" (list 1000.0 0.0 0.0)
+                     (list (cons "Реле_РП25" "Закрыто")))
+        (list (cons "attrs" (list (cons "ПОЗИЦИЯ" "ШУ-2") (cons "НАПРЯЖЕНИЕ" "220В")))
+              (cons "dyn-props" (list (cons "Ширина" 800)))))
+      (append
+        (DB-MakeInst "SH3" "Шкаф_Управления" "Шкаф_Управления"
+                     "Model" "0" (list 2000.0 0.0 0.0)
+                     (list (cons "Реле_РП25" "Открыто")))
+        (list (cons "attrs" (list (cons "ПОЗИЦИЯ" "ШУ-3") (cons "НАПРЯЖЕНИЕ" "380В")))
+              (cons "dyn-props" (list (cons "Ширина" 1000)))))
+      (append
+        (DB-MakeInst "SH4" "Шкаф_Управления" "Шкаф_Управления"
+                     "Лист 1" "0" (list 0.0 0.0 0.0)
+                     (list (cons "Реле_РП25" "Открыто")))
+        (list (cons "attrs" (list (cons "ПОЗИЦИЯ" "ШУ-4") (cons "НАПРЯЖЕНИЕ" "220В")))
+              (cons "dyn-props" (list (cons "Ширина" 800)))))
+      ;; посторонний экземпляр
+      (DB-MakeInst "KP1" "Комплект КП50 v1.5" "Комплект КП50 v1.5"
+                   "Model" "0" (list 5000.0 0.0 0.0) nil)
+    ))
+)
+
+(defun TEST-PlainBlocks ( / p scan plan R25 inst1)
+  (princ "\n\nT25. Унифицированная подмена безверсионных блоков")
+
+  ;; 25a. Разбор имён
+  (setq p (KG-ParseBlockName "Шкаф_Управления"))
+  (T-Ok "T25.1 разбор простого имени не nil" (not (null p)))
+  (T-EqStr "T25.2 base совпадает с именем" (KG-ParseBase "Шкаф_Управления") "Шкаф_Управления")
+  (T-EqStr "T25.3 итерация пустая" (KG-ParseIteration "Шкаф_Управления") "")
+  (T-EqStr "T25.4 вариант пустой" (KG-ParseVariant "Шкаф_Управления") "")
+  (T-Ok "T25.5 семейство совпадает" (KG-IsFamilyName "Шкаф_Управления" "Шкаф_Управления"))
+  (T-Ok "T25.6 другое имя не совпадает" (not (KG-IsFamilyName "Шкаф_Управления" "Шкаф")))
+  (T-Ok "T25.7 интеграционное имя совпадает с пустой итерацией"
+        (KG-IsIntegrationName "Шкаф_Управления" "Шкаф_Управления" ""))
+  (T-Ok "T25.8 интеграционное имя не совпадает с версией 1.5"
+        (not (KG-IsIntegrationName "Шкаф_Управления" "Шкаф_Управления" "1.5")))
+
+  ;; 25b. Сборка имён и сравнение итераций
+  (T-EqStr "T25.9 MakeName без итерации и варианта"
+           (KG-MakeName "Шкаф_Управления" "" "") "Шкаф_Управления")
+  (T-EqStr "T25.10 MakeName без итерации с вариантом"
+           (KG-MakeName "Шкаф_Управления" "" "Исполнение1") "Шкаф_Управления Исполнение1")
+  (T-Ok "T25.11 пустые итерации равны" (KG-IterEq "" ""))
+  (T-Ok "T25.12 пустая и непустая не равны" (not (KG-IterEq "" "1.5")))
+  (T-Ok "T25.13 пустые итерации не считаются разными" (not (KG-IterOther "" "")))
+  (T-Ok "T25.14 пустая и 1.5 считаются разными" (KG-IterOther "" "1.5"))
+
+  ;; 25c. Поиск мастер-версии среди пришедших безверсионных определений
+  (TEST-BuildPlainDrawing)
+  (T-EqStr "T25.15 мастер-версия корневой блок среди вложенных"
+           (KG-DetectMasterName (list "Реле_РП25" "Шкаф_Управления" "Клеммник_КЛ10"))
+           "Шкаф_Управления")
+
+  ;; 25d. Сканирование и план интеграции
+  (TEST-BuildPlainDrawing)
+  (setq scan (KG-ScanFamily (KG_DBGetModel) "Шкаф_Управления" ""))
+  (T-EqInt "T25.16 найдено 4 старых экземпляра" (cdr (assoc "total" scan)) 4)
+  (T-Ok "T25.17 итераций в скане нет" (null (cdr (assoc "iterations" scan))))
+  (setq plan (KG-BuildIntegrationMap (KG_DBGetModel) "Шкаф_Управления" (KG_EXAllDefNames)))
+  (T-Ok "T25.18 план построен" (not (null plan)))
+
+  ;; 25e. Сквозная интеграция безверсионного блока
+  (TEST-BuildPlainDrawing)
+  (TEST-SetClipboard "Шкаф_Управления"
+    (list (DB-MakeDef "Реле_РП25" nil (list "Открыто" "Закрыто" "Авария"))
+          (DB-MakeDef "Клеммник_КЛ10" nil nil)
+          (DB-MakeDef "Шина_PE" nil nil)))
+  (setq R25 (TEST-IntegratePaste "Шкаф_Управления" ""))
+
+  (T-EqInt "T25.19 заменено 4 экземпляра"
+           (cdr (assoc "replaced" (cdr (assoc "replaced" R25)))) 4)
+  (T-EqInt "T25.20 старых не осталось"
+           (cdr (assoc "old-left" (cdr (assoc "validation" R25)))) 0)
+  (T-EqInt "T25.21 потерь нет"
+           (cdr (assoc "lost" (cdr (assoc "validation" R25)))) 0)
+  (T-EqInt "T25.22 всего экземпляров в чертеже 5 (4 шкафа + 1 чужой)"
+           (length (DB-Insts)) 5)
+  (T-Ok "T25.23 новое вложенное определение Шина_PE появилось"
+        (DB-HasDef "Шина_PE"))
+
+  ;; Проверка свойств заменённых экземпляров
+  (setq inst1 (car (vl-remove-if-not
+                     '(lambda (i) (KG-StrEq (KG-CdrCI "eff" i) "Шкаф_Управления"))
+                     (DB-Insts))))
+  (T-Ok "T25.24 экземпляр найден" (not (null inst1)))
+  (T-Ok "T25.25 атрибут ПОЗИЦИЯ перенесён"
+        (KG-StrContains (KG-AsString (KG-CdrCI "ПОЗИЦИЯ" (KG-CdrCI "attrs" inst1))) "ШУ-"))
+  (T-EqStr "T25.26 атрибут НАПРЯЖЕНИЕ перенесён"
+           (KG-AsString (KG-CdrCI "НАПРЯЖЕНИЕ" (KG-CdrCI "attrs" inst1))) "220В")
+  (T-EqStr "T25.27 динамическое свойство перенесено"
+           (KG-AsString (KG-CdrCI "Видимость1" (KG-CdrCI "dyn-props" inst1))) "B")
+  (T-EqStr "T25.28 состояние вложенного блока сохранено"
+           (KG-CdrCI "Реле_РП25" (KG-CdrCI "nested-vis" inst1)) "Открыто")
+  (T-Ok "T25.29 посторонний экземпляр не тронут"
+        (not (null (vl-some '(lambda (i) (KG-StrEq (KG-CdrCI "handle" i) "KP1"))
+                            (DB-Insts)))))
+)
+
 (defun RUN-ALL-TESTS ()
   (setq TESTS-PASSED 0)
   (setq TESTS-FAILED 0)
@@ -3381,6 +3508,7 @@
   (TEST-CollectInstances)
   (TEST-RewireDefs)
   (TEST-AttributesAndSystemBlocks)
+  (TEST-PlainBlocks)
   ;; TEST-VisParam обязан идти ДО TEST-NestedVis: фикстура T22-SetDb
   ;; подменяет KG-GetVisibilityState и KG-SetVisibilityState своими
   ;; заглушками и не возвращает настоящие, поэтому проверка настоящих

@@ -157,7 +157,7 @@
 ;; План интеграции (семейство, варианты, вложенные).
 (if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
 
-(setq KG-VERSION "66")
+(setq KG-VERSION "67")
 
 (vl-load-com)
 
@@ -787,7 +787,16 @@
     nil                                        ; не строка -- разбирать нечего
     (progn
       (setq p (KG-ParseVName name))            ; производственная схема
-      (if (not p) (setq p (KG-ParseParenName name)))
+      (if (not p) (setq p (KG-ParseParenName name))) ; скобочная схема
+      (if (not p)
+        (if (and (/= (KG-TrimBoth name) "")
+                 (not (KG-IsAnonymousName name))
+                 (not (KG-IsSystemBlockName name))
+                 (not (KG-IsServiceName name))
+                 (not (KG-StrContains name "~до")))
+          (setq p (list (KG-TrimBoth name) "" "")) ; простое имя без версии
+        )
+      )
       p
     )
   )
@@ -864,12 +873,19 @@
   )
 )
 
-(defun KG-IterEq (a b / ka kb)
-  (setq ka (KG-IterKey a))
-  (setq kb (KG-IterKey b))
-  (if (and ka kb (= ka kb))
+(defun KG-IterEq (a b / sa sb ka kb)
+  (setq sa (if a (KG-TrimBoth (KG-IterToStr a)) ""))
+  (setq sb (if b (KG-TrimBoth (KG-IterToStr b)) ""))
+  (if (and (= sa "") (= sb ""))
     t
-    nil
+    (if (or (= sa "") (= sb ""))
+      nil
+      (progn
+        (setq ka (KG-IterKey sa))
+        (setq kb (KG-IterKey sb))
+        (if (and ka kb (= ka kb)) t nil)
+      )
+    )
   )
 )
 
@@ -925,12 +941,17 @@
 )
 
 ;;; Сборка имени. Схема выбирается по виду итерации: с точкой -- значит
-;;; производственная "БАЗА vВЕРСИЯ ВАРИАНТ", иначе -- "БАЗА(ИТЕРАЦИЯ)ВАРИАНТ".
+;;; производственная "БАЗА vВЕРСИЯ ВАРИАНТ", непустая без точки -- "БАЗА(ИТЕРАЦИЯ)ВАРИАНТ",
+;;; пустая -- просто "БАЗА ВАРИАНТ" или "БАЗА".
 (defun KG-MakeName (base iter var / s)
   (setq s (if iter (KG-TrimBoth (KG-IterToStr iter)) ""))
-  (if (KG-StrContains s ".")
-    (strcat base " v" s (if (and var (/= var "")) (strcat " " var) ""))
-    (strcat base "(" s ")" (if var var ""))
+  (cond
+    ((= s "")
+     (if (and var (/= var "")) (strcat base " " var) base))
+    ((KG-StrContains s ".")
+     (strcat base " v" s (if (and var (/= var "")) (strcat " " var) "")))
+    (t
+     (strcat base "(" s ")" (if (and var (/= var "")) var "")))
   )
 )
 
@@ -1024,10 +1045,33 @@
 ;; Старые экземпляры: любое вхождение семейства с итерацией, отличной от
 ;;; новой (п. 5 ТЗ). Сравнение «меньше» здесь неприменимо: в чертеже может
 ;;; оказаться и более поздняя итерация, и её трогать нельзя.
-(defun KG-FindOldIterations (model base newiter / out)
+;;; Для блоков без версии (newiter = ""):
+;;; - если модель содержит переименованные определения (~до), старыми
+;;;   считаются только они (а новое определение и его технический экземпляр -- новые);
+;;; - если переименований ещё не было (исходная модель чертежа), все экземпляры
+;;;   базового блока подлежат замене.
+(defun KG-FindOldIterations (model base newiter / out any-do)
   (setq out nil)
-  (foreach pr (KG-FindFamilyInstances model base)
-    (if (KG-IterOther (nth 1 (cdr pr)) newiter) (setq out (cons pr out)))
+  (if (/= (KG-IterToStr newiter) "")
+    (foreach pr (KG-FindFamilyInstances model base)
+      (if (KG-IterOther (nth 1 (cdr pr)) newiter)
+        (setq out (cons pr out)))
+    )
+    (progn
+      (setq any-do
+        (vl-some '(lambda (pr)
+                    (or (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
+                        (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до")))
+                 (KG-FindFamilyInstances model base)))
+      (foreach pr (KG-FindFamilyInstances model base)
+        (if (if any-do
+              (or (/= (nth 1 (cdr pr)) "")
+                  (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
+                  (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до"))
+              t)
+          (setq out (cons pr out)))
+      )
+    )
   )
   out
 )
@@ -1084,6 +1128,7 @@
   (setq pairs (KG-FindOldIterations model base newiter))
   (setq groups (KG-GroupByVariant pairs))
   (setq its (KG-Unique (mapcar '(lambda (pr) (nth 1 (cdr pr))) pairs)))
+  (setq its (vl-remove-if '(lambda (x) (= (KG-AsString x) "")) its))
   (list
     (cons "family" base)
     (cons "newiter" newiter)
@@ -1096,7 +1141,7 @@
     ;; Функции sort в AutoCAD НЕТ -- есть vl-sort, vl-sort-i и
     ;; acad_strlsort; на реальном чертеже (sort ...) дал
     ;; "no function definition: SORT".
-    (cons "iterations" (vl-sort its 'KG-IterOlder))
+    (cons "iterations" (if its (vl-sort its 'KG-IterOlder) nil))
   )
 )
 
@@ -1198,7 +1243,7 @@
     (if (and (< c 1)
              (not (KG-IsAnonymousName nm))
              (or (KG-StrContains nm "~до")
-                 (and p (not (KG-StrInterCI (list nm) keep)))))
+                 (and p (/= (nth 1 p) "") (not (KG-StrInterCI (list nm) keep)))))
       (setq cand (cons nm cand))
     )
   )
@@ -1228,7 +1273,7 @@
   (setq keep nil)
   (foreach nm names
     (setq p (KG-ParseBlockName nm))
-    (if p
+    (if (and p (/= (nth 1 p) ""))
       (progn
         (setq k (strcat (nth 0 p) "|" (nth 2 p)))
         (setq hit (KG-AssocCI k keep))
@@ -1826,7 +1871,8 @@
   (if (and targetnm (KG_EXDefExists targetnm))
     (progn
       (if (null st)
-        (if (and curplan (setq p (KG-ParseBlockName targetnm)))
+        (if (and curplan (setq p (KG-ParseBlockName targetnm))
+                 (KG-StrEq (nth 0 p) (cdr (assoc "family" curplan))))
           (setq st (KG-FindVariantNestedStates (nth 0 p) (nth 2 p) curplan))
         )
       )
@@ -2415,7 +2461,17 @@
 (defun KG-ValidateIntegration (model base newiter expected-groups / pairs left
                                      newpairs newservice out lost per v exp got
                                      defnm)
-  (setq pairs (KG-FindOldIterations model base newiter))
+  (setq pairs
+    (if (/= (KG-IterToStr newiter) "")
+      (KG-FindOldIterations model base newiter)
+      (vl-remove-if-not
+        '(lambda (pr)
+           (or (/= (nth 1 (cdr pr)) "")
+               (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
+               (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до")))
+        (KG-FindFamilyInstances model base))
+    )
+  )
   (setq left (length pairs))
   (setq newpairs nil)
   (foreach ins (KG-ModelInsts model)
@@ -2914,17 +2970,45 @@
 )
 
 ;; Найти имя мастер-версии среди пришедших определений
-(defun KG-DetectMasterName (newdefs / out p)
-  (setq out nil)
+(defun KG-DetectMasterName (newdefs / p vnames parennames plainnames mdl nested-all roots nm c)
+  (setq vnames nil parennames nil plainnames nil)
   (foreach nm newdefs
-    (if (not out)
+    (if (and (not (KG-IsAnonymousName nm))
+             (not (KG-IsSystemBlockName nm)))
       (progn
-        (setq p (KG-ParseBlockName nm))
-        (if (and p (= (nth 2 p) "")) (setq out nm))
+        (if (and (setq p (KG-ParseVName nm)) (= (nth 2 p) ""))
+          (setq vnames (cons nm vnames))
+        )
+        (if (and (setq p (KG-ParseParenName nm)) (= (nth 2 p) ""))
+          (setq parennames (cons nm parennames))
+        )
+        (setq plainnames (cons nm plainnames))
       )
     )
   )
-  out
+  (cond
+    (vnames (car (reverse vnames)))
+    (parennames (car (reverse parennames)))
+    (plainnames
+     ;; Исключаем вложенные детали: мастер -- это корневой блок
+     (setq mdl (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+     (setq nested-all nil)
+     (if mdl
+       (foreach nm plainnames
+         (foreach c (KG-GetNestedBlocks mdl nm)
+           (if (not (member (KG-StrKey c) nested-all))
+             (setq nested-all (cons (KG-StrKey c) nested-all))
+           )
+         )
+       )
+     )
+     (setq roots
+       (vl-remove-if '(lambda (x) (member (KG-StrKey x) nested-all))
+                     (reverse plainnames)))
+     (if roots (car roots) (car (reverse plainnames)))
+    )
+    (t nil)
+  )
 )
 
 ;; Из новых экземпляров выбрать мастер-версию (имя без суффикса)
@@ -2942,6 +3026,9 @@
         )
       )
     )
+  )
+  (if (and (null best) handles)
+    (setq best (car handles))
   )
   best
 )
@@ -3582,18 +3669,22 @@
   ;; Считается ДО замены и без технического экземпляра: иначе отчёт
   ;; сравнит «стало» со счётчиком только старых экземпляров и покажет
   ;; ложное расхождение и ложную потерю.
+  ;; Для блоков без версии (newiter = "") все существующие экземпляры -- старые и заменяются,
+  ;; поэтому KG-ALREADYNEW = nil.
   (setq KG-ALREADYNEW nil)
-  (foreach ins (KG-ModelInsts model)
-    (setq eff (KG-CdrCI "eff" ins))
-    (if (and (KG-IsIntegrationName eff base newiter)
-             (not (KG-StrEq (KG-CdrCI "handle" ins) techhandle)))
-      (progn
-        (setq p (KG-ParseBlockName eff))
-        (setq v (if p (nth 2 p) ""))
-        (setq a (KG-AssocCI v KG-ALREADYNEW))
-        (if a
-          (setq KG-ALREADYNEW (KG-SetAssoc v (1+ (cdr a)) KG-ALREADYNEW))
-          (setq KG-ALREADYNEW (cons (cons v 1) KG-ALREADYNEW))
+  (if (/= (KG-IterToStr newiter) "")
+    (foreach ins (KG-ModelInsts model)
+      (setq eff (KG-CdrCI "eff" ins))
+      (if (and (KG-IsIntegrationName eff base newiter)
+               (not (KG-StrEq (KG-CdrCI "handle" ins) techhandle)))
+        (progn
+          (setq p (KG-ParseBlockName eff))
+          (setq v (if p (nth 2 p) ""))
+          (setq a (KG-AssocCI v KG-ALREADYNEW))
+          (if a
+            (setq KG-ALREADYNEW (KG-SetAssoc v (1+ (cdr a)) KG-ALREADYNEW))
+            (setq KG-ALREADYNEW (cons (cons v 1) KG-ALREADYNEW))
+          )
         )
       )
     )
@@ -3633,6 +3724,29 @@
       ;; и план решает, что обновлять нечего. Именно так на реальном
       ;; чертеже получилось «Обновлено вложенных: 0» при 42 «новых».
       (setq plan (KG-BuildIntegrationMap model mastername beforedefs))
+      ;; Если есть технический экземпляр (вставка из буфера), исключаем его из списка заменяемых
+      (if techhandle
+        (progn
+          (setq plan
+            (KG-SetAssoc "instances"
+              (vl-remove-if
+                '(lambda (pr) (KG-StrEq (KG-CdrCI "handle" (car pr)) techhandle))
+                (cdr (assoc "instances" plan)))
+              plan))
+          (setq plan
+            (KG-SetAssoc "scan"
+              (KG-SetAssoc "groups"
+                (mapcar
+                  '(lambda (g)
+                     (cons (car g)
+                           (vl-remove-if
+                             '(lambda (pr) (KG-StrEq (KG-CdrCI "handle" (car pr)) techhandle))
+                             (cdr g))))
+                  (cdr (assoc "groups" (cdr (assoc "scan" plan)))))
+                (cdr (assoc "scan" plan)))
+              plan))
+        )
+      )
       (setq KG-PLAN plan)
       ;; 6. что из вложенных определений реально пришло
       (setq missing nil)
@@ -6225,8 +6339,11 @@
     (princ "\nОШИБКА: не удалось определить мастер-версию.")
     (progn
       (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
-      (KG-SayKV "Семейство" base)
-      (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+      (KG-SayKV "Семейство / Блок" base)
+      (if (/= (KG-IterToStr newiter) "")
+        (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+        (KG-SayKV "Режим" "подмена блока без версий")
+      )
       (KG-Say "Область обработки: весь файл")
       (KG-Mark "интеграция выполнена, печать отчёта")
       (setq KG-PRERENAMES preren)
@@ -6292,8 +6409,11 @@
         (princ "\nОШИБКА: не удалось определить имя мастер-блока.")
         (progn
           (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
-          (KG-SayKV "Семейство" base)
-          (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+          (KG-SayKV "Семейство / Блок" base)
+          (if (/= (KG-IterToStr newiter) "")
+            (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+            (KG-SayKV "Режим" "подмена блока без версий")
+          )
           (KG-Say "Область обработки: весь файл")
           (setq rep (KG-Integrate_Model base newiter techhandle nil))
           (KG-PrintIntegrationReport rep)
