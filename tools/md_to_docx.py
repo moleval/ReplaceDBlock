@@ -9,6 +9,7 @@
 """
 
 import io
+import os
 import re
 import sys
 
@@ -16,8 +17,8 @@ from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.shared import Pt
 
-SRC = "/home/user/docs/ТЗ.md"
-DST = "/home/user/docs/ТЗ.docx"
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "ТЗ.md")
+DST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "ТЗ.docx")
 
 INLINE = re.compile(r"(\*\*.+?\*\*|`[^`]+`)")
 

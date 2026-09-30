@@ -688,6 +688,16 @@
         (KG-IsIntegrationName "ABC1.01(15)Стойка" "ABC1.01" 15))
   (T-Ok "T1.24 другая итерация не совпадает"
         (not (KG-IsIntegrationName "ABC1.01(14)Стойка" "ABC1.01" 15)))
+
+  ;; правило десятков: v1.5 = v1.50
+  (T-Ok "T1.25 v1.5 и v1.50 равны"
+        (KG-IterEq "1.5" "1.50"))
+  (T-Ok "T1.26 v1.5 и v1.50 равны с префиксом v"
+        (KG-IterEq "v1.5" "v1.50"))
+  (T-Ok "T1.27 v1.50 и 1.5 равны в обратном порядке"
+        (KG-IterEq "1.50" "1.5"))
+  (T-Ok "T1.28 v1.5 и v1.05 не равны"
+        (not (KG-IterEq "1.5" "1.05")))
 )
 
 ;;;---------------------------------------------------------------------------
@@ -3222,6 +3232,85 @@
            "Скрыто")
 )
 
+;;;---------------------------------------------------------------------------
+;;; T24. Системные блоки AutoCAD, атрибуты (ATTRIB) и аннотативность
+;;;---------------------------------------------------------------------------
+
+(defun TEST-AttributesAndSystemBlocks ( / mdl defs insts h newinst oldinst)
+  (princ "\n\nT24. Системные блоки AutoCAD, атрибуты и аннотативность")
+
+  ;; 24a. Распознавание системных блоков
+  (T-Ok "T24.1 _Oblique распознаётся как системный блок"
+        (KG-IsSystemBlockName "_Oblique"))
+  (T-Ok "T24.2 _ArchTick распознаётся как системный блок"
+        (KG-IsSystemBlockName "_ArchTick"))
+  (T-Ok "T24.3 _Dot распознаётся как системный блок"
+        (KG-IsSystemBlockName "_Dot"))
+  (T-Ok "T24.4 *Model_Space распознаётся как системный блок"
+        (KG-IsSystemBlockName "*Model_Space"))
+  (T-Ok "T24.5 *U123 распознаётся как системный блок"
+        (KG-IsSystemBlockName "*U123"))
+  (T-Ok "T24.6 Xref|Block распознаётся как системный блок"
+        (KG-IsSystemBlockName "Xref|Block"))
+  (T-Ok "T24.7 Стойка НЕ системный блок"
+        (not (KG-IsSystemBlockName "Стойка")))
+  (T-Ok "T24.8 Комплект КП50 v1.5 НЕ системный блок"
+        (not (KG-IsSystemBlockName "Комплект КП50 v1.5")))
+
+  ;; 24b. KG-UserDefNames исключает системные блоки _*
+  (setq mdl
+    (list
+      (cons "defs"
+        (list
+          (DB-MakeDef "Комплект КП50 v1.5" nil nil)
+          (DB-MakeDef "Стойка" nil nil)
+          (DB-MakeDef "_Oblique" nil nil)
+          (DB-MakeDef "_ArchTick" nil nil)
+          (DB-MakeDef "*Model_Space" nil nil)))
+      (cons "insts" nil)
+      (cons "layouts" (list "Model"))))
+  (setq defs (KG-UserDefNames mdl))
+  (T-Ok "T24.9 _Oblique и _ArchTick не попадают в KG-UserDefNames"
+        (and (member "Комплект КП50 v1.5" defs)
+             (member "Стойка" defs)
+             (not (member "_Oblique" defs))
+             (not (member "_ArchTick" defs))
+             (not (member "*Model_Space" defs))))
+
+  ;; 24c. KG-ConflictCandidates не собирает _* в кандидаты
+  (setq mdl
+    (list
+      (cons "defs"
+        (list
+          (DB-MakeDef "ABC1.01(1)Стойка" (list "Стойка" "_Oblique") nil)
+          (DB-MakeDef "Стойка" nil nil)
+          (DB-MakeDef "_Oblique" nil nil)))
+      (cons "insts" nil)
+      (cons "layouts" (list "Model"))))
+  (setq defs (KG-ConflictCandidates mdl "ABC1.01"))
+  (T-Ok "T24.10 _Oblique не попадает в кандидаты переименования"
+        (and (member "Стойка" defs)
+             (not (member "_Oblique" defs))))
+
+  ;; 24d. Перенос атрибутов и аннотативности в модели экземпляра
+  (setq oldinst
+    (append
+      (DB-MakeInst "H100" "ABC1.01(1)Стойка" "ABC1.01(1)Стойка" "Model" "0" (list 0.0 0.0 0.0) nil)
+      (list (cons "attrs" (list (cons "ПОЗИЦИЯ" "101") (cons "длина" "1200")))
+            (cons "annotative" t))))
+  (DB-SetDefs (list (DB-MakeDef "ABC1.01(2)Стойка" nil nil)))
+  (DB-SetInsts nil)
+  (setq h (KG_EXCreateInstance "ABC1.01(2)Стойка" oldinst))
+  (setq newinst (DB-FindInst h))
+  (T-Ok "T24.11 новый экземпляр создан" (and h newinst))
+  (T-EqStr "T24.12 атрибут ПОЗИЦИЯ перенесён"
+           (KG-AsString (KG-CdrCI "ПОЗИЦИЯ" (KG-CdrCI "attrs" newinst))) "101")
+  (T-EqStr "T24.13 атрибут ДЛИНА перенесён регистронезависимо"
+           (KG-AsString (KG-CdrCI "ДЛИНА" (KG-CdrCI "attrs" newinst))) "1200")
+  (T-Ok "T24.14 флаг аннотативности перенесён"
+        (KG-CdrCI "annotative" newinst))
+)
+
 (defun RUN-ALL-TESTS ()
   (setq TESTS-PASSED 0)
   (setq TESTS-FAILED 0)
@@ -3251,6 +3340,7 @@
   (TEST-VisBranches)
   (TEST-CollectInstances)
   (TEST-RewireDefs)
+  (TEST-AttributesAndSystemBlocks)
   ;; TEST-VisParam обязан идти ДО TEST-NestedVis: фикстура T22-SetDb
   ;; подменяет KG-GetVisibilityState и KG-SetVisibilityState своими
   ;; заглушками и не возвращает настоящие, поэтому проверка настоящих

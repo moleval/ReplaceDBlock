@@ -29,6 +29,8 @@ ACAD_PRIMITIVES = [
     "vla-get-YScaleFactor", "vla-get-ZScaleFactor", "vla-get-OwnerID",
     "vla-get-ObjectID", "vla-get-Block", "vla-get-PropertyName",
     "vla-put-Name", "vla-put-Layer", "vla-Delete", "vla-Add", "vla-InsertBlock",
+    "vla-get-TagString", "vla-get-TextString", "vla-put-TextString",
+    "vla-get-Annotative", "vla-put-Annotative", "vla-get-HasAttributes",
     "vla-CopyObjects", "vlax-invoke", "vlax-get-property", "vlax-put-property",
     "vlax-property-available-p", "vlax-ename->vla-object",
     "vlax-vla-object->ename", "vlax-3d-point", "vlax-make-safearray",

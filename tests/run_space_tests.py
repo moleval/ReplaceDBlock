@@ -245,6 +245,8 @@ BLOCKS = [
     # лист без объекта Layout -- имя должно остаться именем блока
     FakeBlock("*Paper_Space1", [FakeEnt("7B02")]),
     FakeBlock("Комплект КП50 v1.5", [ENT_NESTED]),
+    FakeBlock("_Oblique", []),
+    FakeBlock("_ArchTick", []),
     FakeBlock("ВнешняяСсылка", [FakeEnt("7C03")], isxref=True),
 ]
 
@@ -551,6 +553,9 @@ def main():
     check("M24 KG-UserDefNames находит определения чертежа",
           lisp_to_string(call(interp, "(KG-UserDefNames *M23*)")),
           "(Комплект КП50 v1.5)")
+    check("M24b системные блоки _Oblique и _ArchTick исключены из пользовательских",
+          lisp_to_string(call(interp, "(member \"_Oblique\" (KG-UserDefNames *M23*))")),
+          "nil")
 
     run_deepcopy_checks()
 

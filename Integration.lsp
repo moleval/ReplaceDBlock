@@ -149,7 +149,7 @@
 ;; Сколько вложенных вставок при снятии осталось без состояния видимости.
 (if (not (boundp 'KG-NESTDROP)) (setq KG-NESTDROP 0))
 
-(setq KG-VERSION "64")
+(setq KG-VERSION "65")
 
 (vl-load-com)
 
@@ -569,6 +569,24 @@
   (and nm (= (substr (KG-AsString nm) 1 1) "*"))
 )
 
+;; Системный блок AutoCAD: анонимный (*...), стрелка размера / выноски (_...)
+;; или зависимый от внешней ссылки (*|*).
+;; Такие блоки создаются и управляются самим AutoCAD, присутствуют в стилях
+;; оформления и шаблонах (напр. _Oblique, _ArchTick, _Dot, _ClosedFilled,
+;; _Origin, _Open, _Small, _None, _DetailView, _SectionView) и никогда не
+;; должны переименовываться или включаться в список кандидатов на
+;; освобождение имён.
+(defun KG-IsSystemBlockName (nm / s)
+  (setq s (KG-AsString nm))
+  (and nm
+       (or (= s "")
+           (= (substr s 1 1) "*")
+           (= (substr s 1 1) "_")
+           (KG-StrContains s "|")
+       )
+  )
+)
+
 ;; Анонимное представление динамического блока: *U и только цифры.
 ;; Именно такие определения держат на себе старые вложенные блоки и
 ;; при этом сами никем не вставлены. *Model_Space, *Paper_Space, *D
@@ -591,7 +609,7 @@
 ;; сохраняется старое определение, и оно не маскируется под результат.
 (defun KG-IsServiceName (nm)
   (and nm
-       (or (KG-IsAnonymousName nm)
+       (or (KG-IsSystemBlockName nm)
            (wcmatch (strcase (KG-AsString nm))
                     "*$0$*,*$1$*,*$2$*,*_NEW,*-КОПИЯ")
        )
@@ -940,14 +958,15 @@
   (mapcar '(lambda (d) (KG-CdrCI "name" d)) (KG-ModelDefs model))
 )
 
-;; Пользовательские определения: не анонимные, не внешние ссылки, не листы
-(defun KG-UserDefNames (model / out)
+;; Пользовательские определения: не анонимные, не системные, не внешние ссылки, не листы
+(defun KG-UserDefNames (model / out nm)
   (setq out nil)
   (foreach d (KG-ModelDefs model)
+    (setq nm (KG-CdrCI "name" d))
     (if (and (not (KG-FlagCI "is-xref" d))
              (not (KG-FlagCI "is-layout" d))
-             (not (KG-IsAnonymousName (KG-CdrCI "name" d))))
-      (setq out (cons (KG-CdrCI "name" d) out))
+             (not (KG-IsSystemBlockName nm)))
+      (setq out (cons nm out))
     )
   )
   (reverse out)
@@ -955,7 +974,7 @@
 
 ;; Рекурсивно собрать вложенные определения (Этап 5).
 ;; Возвращает имена без дублей, не включая само root.
-;; Анонимные определения пропускаются, внешние ссылки -- тоже (п. 3.3 ТЗ).
+;; Анонимные и системные определения пропускаются, внешние ссылки -- тоже (п. 3.3 ТЗ).
 (defun KG-GetNestedBlocks (model root / seen out)
   (setq seen (list (KG-StrKey root)))
   (setq out nil)
@@ -963,7 +982,7 @@
     (setq def (KG-FindDef mdl nm))
     (if def
       (foreach c (KG-CdrCI "nested" def)
-        (if (and (not (KG-IsAnonymousName c))
+        (if (and (not (KG-IsSystemBlockName c))
                  (not (member (KG-StrKey c) seen)))
           (progn
             (setq seen (cons (KG-StrKey c) seen))
@@ -2096,7 +2115,7 @@
   (KG-Unique
     (vl-remove-if
       '(lambda (x) (or (null x) (= x "")
-                       (KG-IsAnonymousName x)
+                       (KG-IsSystemBlockName x)
                        (KG-IsFamilyName x base)))
       out))
 )
@@ -2700,8 +2719,8 @@
   (setq used (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
   (setq out nil)
   (foreach nm names
-    (if (KG-IsXrefDepName nm)
-      (princ (strcat "\nПропущено, определение из внешней ссылки: \""
+    (if (KG-IsSystemBlockName nm)
+      (princ (strcat "\nПропущено, системное определение или из внешней ссылки: \""
                      nm "\""))
       (if (KG_EXDefExists nm)
         (progn
@@ -3792,6 +3811,16 @@
   (setq out (cons (cons "dyn-props"
                         (KG-Safe '(lambda () (KG-GetDynamicProperties obj)) nil))
                   out))
+
+  (KG-TraceDetail (strcat "вхождение " h ": аннотативность"))
+  (setq out (cons (cons "annotative"
+                        (KG-Safe '(lambda () (KG-GetAnnotativeFlag obj)) nil))
+                  out))
+
+  (KG-TraceDetail (strcat "вхождение " h ": атрибуты"))
+  (setq out (cons (cons "attrs"
+                        (KG-Safe '(lambda () (KG-GetAttributeValues obj)) nil))
+                  out))
   out
 )
 
@@ -4423,6 +4452,70 @@
   (reverse out)
 )
 
+;;; Чтение значений атрибутов вхождения блока (ATTRIB).
+;;; Возвращает ассоциативный список (("ТЕГ" . "ЗНАЧЕНИЕ") ...).
+(defun KG-GetAttributeValues (obj / attrs a tag val out)
+  (setq out nil)
+  (if obj
+    (progn
+      (setq attrs (vl-catch-all-apply '(lambda () (vlax-invoke obj 'GetAttributes))))
+      (if (and (not (KG-IsErr attrs)) attrs)
+        (foreach a attrs
+          (setq tag (vl-catch-all-apply '(lambda () (vla-get-TagString a))))
+          (setq val (vl-catch-all-apply '(lambda () (vla-get-TextString a))))
+          (if (and (not (KG-IsErr tag)) (not (KG-IsErr val)))
+            (setq out (cons (cons (KG-AsString tag) (KG-AsString val)) out))
+          )
+        )
+      )
+    )
+  )
+  (reverse out)
+)
+
+;;; Запись значений атрибутов во вхождение блока.
+;;; Сопоставление тегов регистронезависимое через KG-CdrCI.
+;;; Возвращает количество успешно записанных атрибутов.
+(defun KG-SetAttributeValues (obj attrs / attrs-obj a tag val n)
+  (setq n 0)
+  (if (and obj attrs)
+    (progn
+      (setq attrs-obj (vl-catch-all-apply '(lambda () (vlax-invoke obj 'GetAttributes))))
+      (if (and (not (KG-IsErr attrs-obj)) attrs-obj)
+        (foreach a attrs-obj
+          (setq tag (vl-catch-all-apply '(lambda () (vla-get-TagString a))))
+          (if (not (KG-IsErr tag))
+            (progn
+              (setq val (KG-CdrCI (KG-AsString tag) attrs))
+              (if val
+                (if (not (KG-IsErr (vl-catch-all-apply
+                                     '(lambda () (vla-put-TextString a (KG-AsString val))))))
+                  (setq n (1+ n))
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  n
+)
+
+;;; Чтение флага аннотативности вхождения.
+(defun KG-GetAnnotativeFlag (obj / r)
+  (if (and obj (vlax-property-available-p obj 'Annotative))
+    (progn
+      (setq r (vl-catch-all-apply '(lambda () (vla-get-Annotative obj))))
+      (if (and (not (KG-IsErr r)) (= r :vlax-true))
+        t
+        nil
+      )
+    )
+    nil
+  )
+)
+
 ;; Эвристика поиска параметра видимости (п. 9.5 ТЗ).
 ;; Признаки: имя содержит "видим"/"visib", есть список допустимых значений,
 ;; свойство доступно для записи.
@@ -4933,6 +5026,13 @@
         (progn
           (vl-catch-all-apply
             '(lambda () (vla-put-Layer newobj (KG-CdrCI "layer" instmodel))))
+          (if (vlax-property-available-p newobj 'Annotative)
+            (vl-catch-all-apply
+              '(lambda ()
+                 (vla-put-Annotative newobj
+                   (if (KG-CdrCI "annotative" instmodel) :vlax-true :vlax-false))))
+          )
+          (KG-SetAttributeValues newobj (KG-CdrCI "attrs" instmodel))
           (cdr (assoc 5 (entget (vlax-vla-object->ename newobj))))
         )
       )
@@ -5865,11 +5965,11 @@
       ;; так и не освободилось. Состав новой мастер-версии до вставки
       ;; неизвестен, поэтому угадывать его не нужно: освобождается всё,
       ;; а чего буфер не принёс -- KG-Step_RollbackNotArrived вернёт под
-      ;; прежним именем. Анонимные (*U..., *Model_Space), листовые и
-      ;; внешние определения не трогаются.
+      ;; прежним именем. Анонимные (*U..., *Model_Space), системные (_...),
+      ;; листовые и внешние определения не трогаются.
       (setq pre nil)
       (foreach nm (KG-UserDefNames mdl)
-        (if (and (/= (substr nm 1 1) "*") (not (member nm pre)))
+        (if (and (not (KG-IsSystemBlockName nm)) (not (member nm pre)))
           (setq pre (cons nm pre))
         )
       )
