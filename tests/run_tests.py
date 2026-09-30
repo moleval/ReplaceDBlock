@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-run_tests.py -- запуск тестов Integration.lsp.
+run_tests.py -- запуск тестов RepDblock.lsp.
 
-Загружает РЕАЛЬНЫЙ файл Integration.lsp интерпретатором AutoLISP-подмножества
+Загружает РЕАЛЬНЫЙ файл RepDblock.lsp интерпретатором AutoLISP-подмножества
 (tests/autolisp.py), подставляет тестовые адаптеры БД и исполняет тесты.
 
 Запуск:  python3 tests/run_tests.py
@@ -40,16 +40,16 @@ def main():
     # подставляются тестами.
     interp.load_string("(setq KG-TESTING T)")
 
-    lisp_path = os.path.join(ROOT, "Integration.lsp")
+    lisp_path = os.path.join(ROOT, "RepDblock.lsp")
     tests_path = os.path.join(HERE, "tests.lsp")
 
     try:
         interp.load_file(lisp_path)
     except LispError as exc:
-        print("ОШИБКА ЗАГРУЗКИ Integration.lsp:", exc)
+        print("ОШИБКА ЗАГРУЗКИ RepDblock.lsp:", exc)
         return 2
     except RecursionError:
-        print("ОШИБКА: переполнение стека при загрузке Integration.lsp")
+        print("ОШИБКА: переполнение стека при загрузке RepDblock.lsp")
         return 2
 
     try:

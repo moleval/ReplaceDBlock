@@ -1,9 +1,9 @@
 """
 autolisp.py -- минимальный интерпретатор подмножества AutoLISP.
 
-Нужен только для того, чтобы исполнять РЕАЛЬНЫЙ файл Integration.lsp на
+Нужен только для того, чтобы исполнять РЕАЛЬНЫЙ файл RepDblock.lsp на
 тестовом стенде (в песочнице нет AutoCAD). Поддерживается ровно то
-подмножество, которое используется в Integration.lsp:
+подмножество, которое используется в RepDblock.lsp:
 
   специальные формы : defun lambda setq let let* if cond progn while foreach
                       repeat and or quote
@@ -312,7 +312,7 @@ class Keyword:
 
     В AutoLISP это символ, а символ в условии ИСТИНЕН -- в том числе
     :vlax-false. Именно на этом ломались логические флаги COM в
-    Integration.lsp: (if (vla-get-IsXRef blk) t nil) давал t для любого
+    RepDblock.lsp: (if (vla-get-IsXRef blk) t nil) давал t для любого
     определения. Интерпретатор обязан вести себя так же, иначе тесты
     такую ошибку не ловят.
     """

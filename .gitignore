@@ -4,6 +4,7 @@ __pycache__/
 *.tmp
 *~
 
-# Устаревшая копия программы: тесты берут ../Integration.lsp
+# Устаревшая копия программы: тесты берут ../RepDblock.lsp
+/tests/RepDblock.lsp
 /tests/Integration.lsp
 *.bundle

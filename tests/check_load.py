@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_load.py -- проверка, что Integration.lsp загружается ЦЕЛИКОМ,
+check_load.py -- проверка, что RepDblock.lsp загружается ЦЕЛИКОМ,
 включая раздел 8 (исполняющий слой AutoCAD), и что в разделе 8 нет
 обращений к неопределённым LISP-функциям.
 
@@ -59,7 +59,7 @@ def main():
     # vlax-for -- макрос обхода; достаточно, чтобы не падать на загрузке
     interp.define("vlax-for", lambda *a: None)
 
-    path = os.path.join(ROOT, "Integration.lsp")
+    path = os.path.join(ROOT, "RepDblock.lsp")
     try:
         interp.load_file(path)
     except LispError as exc:
@@ -110,31 +110,47 @@ def main():
           % len(called))
 
     # ключевые команды должны существовать
-    cmds = ["C:INTEGRATE", "C:INTEGRATECHECK", "C:INTDIAG", "C:INTDUMP", "C:INTDUMPDEF",
-            "C:INTPASTETEST", "C:INTTESTBED",
-            "C:INTDBXTEST", "C:INTRENAMETEST",
-            "C:INTCLEANUP", "C:INTCOUNT", "C:INTBRIEF", "C:INTERR"]
+    cmds = [
+        "C:RDB", "C:REPDBLOCK", "C:ПОДМЕНАБЛОКА", "C:ПДБ", "C:INTEGRATE",
+        "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK", "C:ПДБЧЕК",
+        "C:RDBDIAG", "C:INTDIAG", "C:ПДБДИАГ",
+        "C:RDBDUMP", "C:INTDUMP", "C:ПДБДАМП",
+        "C:RDBDUMPDEF", "C:INTDUMPDEF", "C:ПДБДАМПОПР",
+        "C:RDBPASTETEST", "C:INTPASTETEST", "C:ПДБТЕСТВСТАВКИ",
+        "C:RDBTESTBED", "C:INTTESTBED", "C:ПДБСТЕНД",
+        "C:RDBDBXTEST", "C:INTDBXTEST", "C:ПДБТЕСТDBX",
+        "C:RDBRENAMETEST", "C:INTRENAMETEST", "C:ПДБТЕСТПЕРЕИМ",
+        "C:RDBCLEANUP", "C:INTCLEANUP", "C:ПДБОЧИСТКА",
+        "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
+        "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
+        "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
+    ]
     absent = [c for c in cmds if c not in defined]
     if absent:
         print("\nНе определены команды:", absent)
         return 1
-    print("Все команды определены:", ", ".join(c[2:] for c in cmds))
+    print("Все команды и алиасы определены (%d шт.): %s"
+          % (len(cmds), ", ".join(c[2:] for c in cmds)))
 
-    # баннер загрузки обязан перечислять их же: иначе команда есть, а
-    # пользователь о ней не знает (в сборке 19 так потерялся INTDBXTEST)
+    # баннер загрузки обязан перечислять основные команды:
     # смотрим ТОЛЬКО в текст баннера: имя команды встречается и в defun,
     # поэтому проверка по всему файлу была бы тривиально зелёной
     bstart = src.find("Команды: ")
     bend = src.find("))", bstart) if bstart >= 0 else -1
     banner = src[bstart:bend] if bstart >= 0 and bend > bstart else ""
-    banner_missing = [c[2:] for c in cmds if c[2:] not in banner]
+    main_cmds = [
+        "RDB", "RDBCHECK", "RDBDIAG", "RDBDUMP", "RDBDUMPDEF",
+        "RDBPASTETEST", "RDBTESTBED", "RDBDBXTEST", "RDBRENAMETEST",
+        "RDBCLEANUP", "RDBCOUNT", "RDBBRIEF", "RDBERR"
+    ]
+    banner_missing = [c for c in main_cmds if c not in banner]
     if not banner:
         print("\nБаннер загрузки не найден")
         return 1
     if banner_missing:
         print("\nБаннер загрузки не упоминает команды:", banner_missing)
         return 1
-    print("Баннер загрузки перечисляет все команды.")
+    print("Баннер загрузки перечисляет все основные команды.")
     return 0
 
 

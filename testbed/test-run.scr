@@ -1,10 +1,10 @@
 ; Скрипт прогона для AutoCAD. Запуск: SCRIPT -> этот файл.
 ; Путь в первой строке поправьте под себя.
-(load "Integration.lsp")
+(load "RepDblock.lsp")
 (setq KG-TRACE t)
-INTCOUNT
-INTEGRATE
-INTCOUNT
-INTBRIEF
-INTERR
+RDBCOUNT
+RDB
+RDBCOUNT
+RDBBRIEF
+RDBERR
 (setq KG-TRACE nil)

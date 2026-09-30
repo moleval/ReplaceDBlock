@@ -1,6 +1,6 @@
-# ReplaceDBlock — интеграция новой итерации семейства динамических блоков
+# ReplaceDBlock — интеграция и подмена динамического блока
 
-AutoLISP + COM для AutoCAD. Команда `INTEGRATE` берёт из буфера обмена новую
+AutoLISP + COM для AutoCAD. Команда `RDB` (алиасы: `RepDblock`, `ПОДМЕНАБЛОКА`, `ПДБ`, `INTEGRATE`) берёт из буфера обмена новую
 итерацию семейства динамических блоков и заменяет ею все вхождения старых
 итераций в текущем чертеже: создаёт недостающие варианты, обновляет общие
 вложенные определения по всему чертежу, сохраняет видимость вложенных блоков
@@ -12,7 +12,7 @@ AutoLISP + COM для AutoCAD. Команда `INTEGRATE` берёт из буф
 
 | Путь | Что это |
 |---|---|
-| `Integration.lsp` | программа. Грузится в AutoCAD: `(load "D:/Integration.lsp")` |
+| `RepDblock.lsp` | программа. Грузится в AutoCAD: `(load "D:/RepDblock.lsp")` или через `APPLOAD` |
 | `docs/ТЗ.md` | техническое задание (свод действующих требований) |
 | `docs/ИНСТРУКЦИЯ_ПРОГОН.md` | порядок прогона в AutoCAD: что, в каком файле, когда |
 | `docs/КАК_СНЯТЬ_ЛОГ.md` | как снять лог командной строки для разбора |
@@ -23,35 +23,45 @@ AutoLISP + COM для AutoCAD. Команда `INTEGRATE` берёт из буф
 
 ## Команды
 
-Основная — `INTEGRATE`. Остальные — диагностика и очистка:
-`INTEGRATECHECK`, `INTDIAG`, `INTDUMP`, `INTDUMPDEF`, `INTPASTETEST`,
-`INTTESTBED`, `INTDBXTEST`, `INTRENAMETEST`, `INTCLEANUP`, `INTCOUNT`,
-`INTBRIEF`, `INTERR`.
+Основная — `RDB` (алиасы: `RepDblock`, `ПОДМЕНАБЛОКА`, `ПДБ`, `INTEGRATE`).
 
-Все действия по обновлению одноимённых блоков выполняются внутри
-`INTEGRATE`, отдельной команды обновления нет.
+Остальные — диагностика и очистка:
+- `RDBCHECK` (алиасы: `INTEGRATECHECK`, `REPDBLOCKCHECK`, `ПДБЧЕК`) — скан семейства без изменений;
+- `RDBDIAG` (алиасы: `INTDIAG`, `ПДБДИАГ`) — диагностика чтения определений и вхождений чертежа;
+- `RDBDUMP` (алиасы: `INTDUMP`, `ПДБДАМП`) — свойства выбранного экземпляра;
+- `RDBDUMPDEF` (алиасы: `INTDUMPDEF`, `ПДБДАМПОПР`) — диагностика определения блока;
+- `RDBPASTETEST` (алиасы: `INTPASTETEST`, `ПДБТЕСТВСТАВКИ`) — тест вставки из буфера;
+- `RDBTESTBED` (алиасы: `INTTESTBED`, `ПДБСТЕНД`) — генерация тестового стенда блоков;
+- `RDBDBXTEST` (алиасы: `INTDBXTEST`, `ПДБТЕСТDBX`) — проверка глубокого клонирования через ObjectDBX;
+- `RDBRENAMETEST` (алиасы: `INTRENAMETEST`, `ПДБТЕСТПЕРЕИМ`) — проверка сохранения динамики при переименовании;
+- `RDBCLEANUP` (алиасы: `INTCLEANUP`, `ПДБОЧИСТКА`) — многопроходная очистка определений прошлой интеграции;
+- `RDBCOUNT` (алиасы: `INTCOUNT`, `ПДБСЧЁТ`) — снимок таблицы блоков и подсчёт прямых вставок;
+- `RDBBRIEF` (алиасы: `INTBRIEF`, `ПДБКРАТКО`) — краткая выжимка состояния чертежа;
+- `RDBERR` (алиасы: `INTERR`, `ПДБОШИБКА`) — отчёт о последней ошибке.
+
+Все действия по обновлению одноимённых блоков выполняются внутри `RDB`, отдельной команды обновления нет.
 
 ## Как прогнать
 
 Коротко: в файле-доноре скопировать мастер-блок (`Ctrl+C`), в
-файле-реципиенте загрузить `Integration.lsp` и выполнить `INTEGRATE`.
+файле-реципиенте загрузить `RepDblock.lsp` и выполнить `RDB` (или `ПОДМЕНАБЛОКА`, `ПДБ`, `INTEGRATE`).
 Полный порядок с пометкой активного чертежа на каждом шаге — в
 `docs/ИНСТРУКЦИЯ_ПРОГОН.md`.
 
 ## Тесты
 
 Тесты не требуют AutoCAD: `tests/autolisp.py` — интерпретатор подмножества
-AutoLISP, который исполняет реальный `Integration.lsp` с подменёнными
+AutoLISP, который исполняет реальный `RepDblock.lsp` с подменёнными
 адаптерами чертежа. Раздел 8 (исполняющий слой AutoCAD) при этом не
 загружается.
 
 ```
 python3 tests/run_tests.py         # 587 проверок
 python3 tests/run_space_tests.py   # 46 проверок
-python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён
-python3 tools/lint_parens.py Integration.lsp
-python3 tools/check_arity.py Integration.lsp
-python3 tools/check_acad_funcs.py Integration.lsp
+python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён, 42 команды/алиаса
+python3 tools/lint_parens.py RepDblock.lsp
+python3 tools/check_arity.py RepDblock.lsp
+python3 tools/check_acad_funcs.py RepDblock.lsp
 ```
 
 `check_load.py` грузит файл с `KG-TESTING = nil` и проверяет, что в разделе 8

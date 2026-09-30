@@ -3,7 +3,7 @@
 run_space_tests.py -- прогон РЕАЛЬНЫХ функций раздела 8, которые отвечают за
 определение пространства вхождения (модель / лист).
 
-Зачем отдельный прогон: tests/run_tests.py грузит Integration.lsp с
+Зачем отдельный прогон: tests/run_tests.py грузит RepDblock.lsp с
 KG-TESTING = T, то есть раздел 8 (исполняющий слой AutoCAD) не загружается
 вообще, и правки в нём тестами не исполнялись. Именно в разделе 8 жила
 ошибка с группой 330, из-за которой на реальном чертеже не читалось ни одно
@@ -366,7 +366,7 @@ def run_deepcopy_checks():
     """
     fresh_world()
     interp = build_interp()
-    interp.load_file(os.path.join(ROOT, "Integration.lsp"))
+    interp.load_file(os.path.join(ROOT, "RepDblock.lsp"))
     print()
     print("Глубокое копирование определения (свежий интерпретатор)")
 
@@ -395,14 +395,14 @@ def run_deepcopy_checks():
 
 def main():
     interp = build_interp()
-    path = os.path.join(ROOT, "Integration.lsp")
+    path = os.path.join(ROOT, "RepDblock.lsp")
     try:
         interp.load_file(path)
     except LispError as exc:
-        print("ОШИБКА ЗАГРУЗКИ Integration.lsp:", exc)
+        print("ОШИБКА ЗАГРУЗКИ RepDblock.lsp:", exc)
         return 2
 
-    print("Integration.lsp загружен БЕЗ KG-TESTING: раздел 8 определён.")
+    print("RepDblock.lsp загружен БЕЗ KG-TESTING: раздел 8 определён.")
     print("Прогон реальных функций определения пространства\n")
 
     # карта строится настоящей KG-BuildSpaceMap

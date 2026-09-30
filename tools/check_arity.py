@@ -12,7 +12,7 @@ check_arity.py -- проверка числа аргументов в вызов
 Скрипт разбирает файл на s-выражения, собирает арность каждого defun и
 сверяет её с числом аргументов во всех вызовах.
 
-Запуск:  python3 tools/check_arity.py Integration.lsp
+Запуск:  python3 tools/check_arity.py RepDblock.lsp
 """
 
 import io

@@ -1,18 +1,23 @@
 ;;;===========================================================================
-;;; Integration.lsp  --  интеграция новой итерации динамического блока
-;;;                        из буфера обмена в текущий DWG
+;;; RepDblock.lsp  --  интеграция / подмена динамического блока
+;;;                    из буфера обмена в текущий DWG
 ;;;
-;;; Команды:
-;;;   INTEGRATE       -- полная интеграция
-;;;   INTEGRATECHECK  -- скан без изменений (Этап 2)
-;;;   INTDUMP         -- диагностика экземпляра (Этап 0.5)
-;;;   INTDUMPDEF      -- диагностика определения (Этап 0.5)
-;;;   INTPASTETEST    -- диагностика вставки из буфера (Этап 0.6)
-;;;   INTTESTBED      -- построение тестового стенда (Этап 0)
-;;;   INTCLEANUP      -- очистка определений прошлой интеграции
-;;;   INTCOUNT        -- снимок таблицы блоков: вставок на определение
-;;;   INTBRIEF        -- короткая выжимка: чем кончилась очистка
-;;;   INTERR          -- короткий отчёт об ошибке (для отправки в чат)
+;;; Основная команда:
+;;;   RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE)  -- полная замена/интеграция
+;;;
+;;; Служебные и диагностические команды:
+;;;   RDBCHECK (INTEGRATECHECK, ПДБЧЕК)    -- скан без изменений (Этап 2)
+;;;   RDBDUMP (INTDUMP, ПДБДАМП)           -- диагностика экземпляра (Этап 0.5)
+;;;   RDBDUMPDEF (INTDUMPDEF, ПДБДАМПОПР)  -- диагностика определения (Этап 0.5)
+;;;   RDBPASTETEST (INTPASTETEST)          -- диагностика вставки из буфера (Этап 0.6)
+;;;   RDBTESTBED (INTTESTBED, ПДБСТЕНД)    -- построение тестового стенда (Этап 0)
+;;;   RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА)  -- очистка определений прошлой интеграции
+;;;   RDBCOUNT (INTCOUNT, ПДБСЧЁТ)         -- снимок таблицы блоков: вставок на определение
+;;;   RDBBRIEF (INTBRIEF, ПДБКРАТКО)       -- короткая выжимка: чем кончилась очистка
+;;;   RDBERR (INTERR, ПДБОШИБКА)           -- короткий отчёт об ошибке (для отправки в чат)
+;;;   RDBDIAG (INTDIAG, ПДБДИАГ)           -- диагностика чтения чертежа
+;;;   RDBDBXTEST (INTDBXTEST, ПДБТЕСТDBX)  -- проверка глубокого клонирования (ObjectDBX)
+;;;   RDBRENAMETEST (INTRENAMETEST)        -- проба переименования и динамики
 ;;;
 ;;; ГЛАВНЫЙ ПРИНЦИП: источник истины -- содержимое буфера обмена.
 ;;; Имена вида "ABC1.01(15)Стойка" в ТЗ -- только примеры. Программа
@@ -5424,14 +5429,14 @@
   )
 )
 
-;;;--- INTDBXTEST: сохраняется ли динамика при копировании определения ----
+;;;--- RDBDBXTEST (INTDBXTEST): сохраняется ли динамика при копировании определения ----
 ;;;
 ;;; Проба для реального AutoCAD: создаёт копию выбранного определения через
 ;;; ObjectDBX под именем «имя~тест», печатает, осталась ли копия
 ;;; динамической, и удаляет её. Чертеж не меняется.
-(defun C:INTDBXTEST ( / sel e nm test b ok dyn)
+(defun C:RDBDBXTEST ( / sel e nm test b ok dyn)
   (vl-load-com)
-  (princ "\n=== INTDBXTEST: проверка глубокого клонирования ===")
+  (princ "\n=== RDBDBXTEST: проверка глубокого клонирования ===")
   (KG-SayKV "ACADVER" (KG-AsString (getvar "ACADVER")))
   (if (not (KG-Safe '(lambda () (KG-ObjectDbx)) nil))
     (progn
@@ -5485,8 +5490,10 @@
   )
   (princ)
 )
+(defun C:INTDBXTEST () (C:RDBDBXTEST))
+(defun C:ПДБТЕСТDBX () (C:RDBDBXTEST))
 
-;;;--- INTRENAMETEST --------------------------------------------------------
+;;;--- RDBRENAMETEST (INTRENAMETEST) ----------------------------------------
 ;;; Проба: сохраняет ли vla-put-Name динамические свойства определения.
 ;;;
 ;;; От ответа зависит запасной путь построения варианта БЕЗ ObjectDBX:
@@ -5495,9 +5502,9 @@
 ;;; переименование динамику ломает -- этот путь неприменим.
 ;;;
 ;;; Проба обратима: имя возвращается на место.
-(defun C:INTRENAMETEST ( / sel e nm b d0 tmp r d1 d2)
+(defun C:RDBRENAMETEST ( / sel e nm b d0 tmp r d1 d2)
   (vl-load-com)
-  (princ "\n=== INTRENAMETEST: переименование и динамика ===")
+  (princ "\n=== RDBRENAMETEST: переименование и динамика ===")
   (setq sel (KG-Safe '(lambda () (entsel "\nВыберите блок для пробы: ")) nil))
   (if (or (null sel) (KG-IsErr sel))
     (princ "\nНичего не выбрано.")
@@ -5546,8 +5553,10 @@
   )
   (princ)
 )
+(defun C:INTRENAMETEST () (C:RDBRENAMETEST))
+(defun C:ПДБТЕСТПЕРЕИМ () (C:RDBRENAMETEST))
 
-;;;--- INTCLEANUP -----------------------------------------------------------
+;;;--- RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА) ----------------------------------
 ;;; Удалить определения, оставшиеся от интеграции.
 ;;;
 ;;; PURGE здесь не помогает из-за ПОРЯДКА: старый вариант семейства
@@ -5787,22 +5796,26 @@
   (length left)
 )
 
-(defun C:INTCLEANUP ( / r)
+;;;--- RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА) ---------------------------------
+(defun C:RDBCLEANUP ( / r)
   (vl-load-com)
   (setq r (KG-CleanupRun))
   (princ)
 )
+(defun C:INTCLEANUP () (C:RDBCLEANUP))
+(defun C:ПДБОЧИСТКА () (C:RDBCLEANUP))
 
+;;;--- RDBCOUNT (INTCOUNT, ПДБСЧЁТ) -----------------------------------------
 ;;; Контрольный снимок таблицы блоков: сколько у каждого определения
 ;;; прямых вставок. Нужен, чтобы проверить очистку ДО и ПОСЛЕ на большом
 ;;; чертеже: «своих без ссылок» и «сиротских *U» в отчёте -- это числа, а
 ;;; здесь видно, какие именно определения остались и держит ли их кто-то.
 ;;; Вывод разбит на три группы, чтобы не понадобилась сортировка строк.
-(defun C:INTCOUNT ( / holders names out n tot grp g nm c)
+(defun C:RDBCOUNT ( / holders names out n tot grp g nm c)
   (vl-load-com)
   (setq holders (KG-Unmark (KG-Safe '(lambda () (KG-EXRefHolders)) nil)))
   (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
-  (princ (strcat "\n=== INTCOUNT: определений "
+  (princ (strcat "\n=== RDBCOUNT: определений "
                  (itoa (length (if names names nil))) " ==="))
   (setq tot 0)
   (foreach grp (list (list "ОПРЕДЕЛЕНИЯ ПРОШЛОЙ ИНТЕГРАЦИИ (~до)"
@@ -5829,14 +5842,17 @@
   (princ (strcat "\nВсего прямых вставок своих определений: " (itoa tot)))
   (princ)
 )
+(defun C:INTCOUNT () (C:RDBCOUNT))
+(defun C:ПДБСЧЁТ () (C:RDBCOUNT))
 
+;;;--- RDBBRIEF (INTBRIEF, ПДБКРАТКО) ---------------------------------------
 ;;; Короткая выжимка состояния чертежа: десятки строк вместо полного
 ;;; лога. Нужна потому, что полный лог с KG-TRACE на чертеже с десятками
 ;;; определений -- это сотни килобайт текста, и в окно чата он не
 ;;; вставляется. Печатается ровно то, по чему видно, состоялась очистка:
 ;;; сколько определений осталось, сколько из них без вставок, сколько
 ;;; сиротских *U и что именно мешает их стереть.
-(defun C:INTBRIEF ( / holders names keep cand orph nodo nu inside dang
+(defun C:RDBBRIEF ( / holders names keep cand orph nodo nu inside dang
                       blocked nm n lines)
   (vl-load-com)
   (setq holders (KG-Unmark (KG-Safe '(lambda () (KG-EXRefHolders)) nil)))
@@ -5911,13 +5927,16 @@
   (princ (strcat "\nKG-TRACE = " (if KG-TRACE "t" "nil")))
   (princ)
 )
+(defun C:INTBRIEF () (C:RDBBRIEF))
+(defun C:ПДБКРАТКО () (C:RDBBRIEF))
 
+;;;--- RDBERR (INTERR, ПДБОШИБКА) -------------------------------------------
 ;;; Короткий отчёт об ошибке: 5-8 строк, которые помещаются в сообщение
 ;;; даже когда полный лог не отправить. Печатает последнюю ошибку, шаг,
 ;;; на котором команда упала, и состояние чертежа после падения.
 ;;; Нужен потому, что KG-ErrorRestore обнуляет KG-LAST-STEP, и к моменту,
 ;;; когда пользователь садится писать письмо, улики уже нет.
-(defun C:INTERR ( / )
+(defun C:RDBERR ( / )
   (princ (strcat "\n=== ОТЧЁТ ОБ ОШИБКЕ (сборка " KG-VERSION ") ==="))
   (princ (strcat "\nОшибка: "
                  (if KG-LAST-ERROR KG-LAST-ERROR
@@ -5936,9 +5955,11 @@
                    (KG-AsString (cdr KG-MASTER-FREED)) "\""))
   )
   (princ "\nСостояние чертежа после падения:")
-  (KG-Safe '(lambda () (C:INTBRIEF)) nil)
+  (KG-Safe '(lambda () (C:RDBBRIEF)) nil)
   (princ)
 )
+(defun C:INTERR () (C:RDBERR))
+(defun C:ПДБОШИБКА () (C:RDBERR))
 
 ;;;--- Команды ---------------------------------------------------------------
 
@@ -6003,9 +6024,9 @@
   (setvar "CMDDIA" 0)
 )
 
-;;;--- INTEGRATECHECK: скан без изменений (Этап 2) ---------------------------
+;;;--- RDBCHECK (INTEGRATECHECK, REPDBLOCKCHECK, ПДБЧЕК): скан без изменений (Этап 2) -
 
-(defun C:INTEGRATECHECK ( / *error* model base scan)
+(defun C:RDBCHECK ( / *error* model base scan)
   (defun *error* (m) (KG-ErrorRestore m))
   (vl-load-com)
   (KG-SaveVars)
@@ -6024,17 +6045,20 @@
   (KG-ErrorRestore nil)
   (princ)
 )
+(defun C:INTEGRATECHECK () (C:RDBCHECK))
+(defun C:REPDBLOCKCHECK () (C:RDBCHECK))
+(defun C:ПДБЧЕК () (C:RDBCHECK))
 
-;;;--- INTEGRATE: полная интеграция -----------------------------------------
+;;;--- RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE): полная подмена/интеграция -----
 
-(defun C:INTEGRATE ( / *error* m mastername p base newiter techhandle
-                       rep snap snap0 beforedefs afterdefs fb
-                       mdl pre preren hsnap nm cln)
+(defun C:RDB ( / *error* m mastername p base newiter techhandle
+                 rep snap snap0 beforedefs afterdefs fb
+                 mdl pre preren hsnap nm cln)
   (defun *error* (m) (KG-ErrorRestore m))
   (vl-load-com)
   (KG-SaveVars)
 
-  (princ (strcat "\n=== Интеграция новой итерации семейства (сборка "
+  (princ (strcat "\n=== Подмена / интеграция новой итерации семейства (сборка "
                  KG-VERSION ") ==="))
   (if KG-TRACE
     (princ (strcat "\nВключена подробная печать шагов (KG-TRACE). "
@@ -6233,18 +6257,22 @@
                            (strcat "осталось неиспользуемых определений: "
                                    (itoa (KG-AsNum cln 0))
                                    ". На чертёж не влияют, снимаются "
-                                   "повторным INTCLEANUP или PURGE.")
+                                   "повторным RDBCLEANUP или PURGE.")
                            "чисто, лишнего не осталось")
                          " ==="))
         )
         (princ (strcat "\nОчистка отключена (KG-AUTOCLEAN = nil)."
-                       " Запустите INTCLEANUP."))
+                       " Запустите RDBCLEANUP."))
       )
     )
   )
   (KG-ErrorRestore nil)
   (princ)
 )
+(defun C:REPDBLOCK () (C:RDB))
+(defun C:ПОДМЕНАБЛОКА () (C:RDB))
+(defun C:ПДБ () (C:RDB))
+(defun C:INTEGRATE () (C:RDB))
 
 ;; Выбор мастер-блока пользователем (Режим B).
 ;; Возврат nil (Enter без выбора) означает "использовать буфер обмена".
@@ -6305,17 +6333,17 @@
   r
 )
 
-;;;--- INTDIAG: диагностика чтения чертежа ------------------------------------
+;;;--- RDBDIAG (INTDIAG, ПДБДИАГ): диагностика чтения чертежа ------------------
 ;;; Проходит по всем определениям и вхождениям и печатает, на каком объекте
-;;; чтение ломается. Ничего не меняет. Нужна, когда INTEGRATE падает с
+;;; чтение ломается. Ничего не меняет. Нужна, когда RDB падает с
 ;;; ошибкой типа: по выводу видно конкретное имя блока.
-(defun C:INTDIAG ( / *error* blk nm r ss i e h ok bad firstbad obj m)
+(defun C:RDBDIAG ( / *error* blk nm r ss i e h ok bad firstbad obj m)
   (defun *error* (m) (KG-ErrorRestore m))
   (vl-load-com)
   (KG-SaveVars)
   (setq KG-VERBOSE t)
 
-  (KG-Say (strcat "=== INTDIAG, сборка " KG-VERSION " ==="))
+  (KG-Say (strcat "=== RDBDIAG, сборка " KG-VERSION " ==="))
 
   ;; 1. определения
   (KG-Say "Определения:")
@@ -6401,15 +6429,18 @@
   (KG-ErrorRestore nil)
   (princ)
 )
+(defun C:INTDIAG () (C:RDBDIAG))
+(defun C:ПДБДИАГ () (C:RDBDIAG))
 
 
-(defun C:INTDUMP ( / e obj dp vis allowed nm)
+;;;--- RDBDUMP (INTDUMP, ПДБДАМП): диагностика экземпляра -------------------
+(defun C:RDBDUMP ( / e obj dp vis allowed nm)
   (vl-load-com)
   (setq e (car (entsel "\nВыберите блок для диагностики: ")))
   (if e
     (progn
       (setq obj (vlax-ename->vla-object e))
-      (KG-Say "=== INTDUMP ===")
+      (KG-Say "=== RDBDUMP ===")
       (KG-SayKV "Name" (cdr (assoc 2 (entget e))))
       (KG-SayKV "EffectiveName" (KG-EffectiveNameOf obj))
       (KG-SayKV "Handle" (cdr (assoc 5 (entget e))))
@@ -6448,15 +6479,17 @@
   )
   (princ)
 )
+(defun C:INTDUMP () (C:RDBDUMP))
+(defun C:ПДБДАМП () (C:RDBDUMP))
 
-;;;--- INTDUMPDEF: диагностика определения (Этап 0.5) ----------------------
+;;;--- RDBDUMPDEF (INTDUMPDEF, ПДБДАМПОПР): диагностика определения (Этап 0.5)
 
-(defun C:INTDUMPDEF ( / nm)
+(defun C:RDBDUMPDEF ( / nm)
   (vl-load-com)
   (setq nm (getstring t "\nИмя определения блока: "))
   (if (/= nm "")
     (progn
-      (KG-Say "=== INTDUMPDEF ===")
+      (KG-Say "=== RDBDUMPDEF ===")
       (KG-SayKV "Определение" nm)
       (KG-SayKV "Существует" (if (KG_EXDefExists nm) "да" "нет"))
       (KG-SayKV "Вложенные ссылки" (vl-princ-to-string (KG-DefNestedRefs nm)))
@@ -6469,15 +6502,17 @@
   )
   (princ)
 )
+(defun C:INTDUMPDEF () (C:RDBDUMPDEF))
+(defun C:ПДБДАМПОПР () (C:RDBDUMPDEF))
 
-;;;--- INTPASTETEST: диагностика вставки из буфера (Этап 0.6) --------------
+;;;--- RDBPASTETEST (INTPASTETEST, ПДБТЕСТВСТАВКИ): диагностика вставки из буфера (Этап 0.6) -
 ;;; Отвечает на ключевой вопрос этапа: что реально приходит из буфера и
 ;;; переименовываются ли конфликтующие определения.
 
-(defun C:INTPASTETEST ( / snap before after newdefs gone i nm newinst h)
+(defun C:RDBPASTETEST ( / snap before after newdefs gone i nm newinst h)
   (vl-load-com)
   (KG-SaveVars)
-  (KG-Say "=== INTPASTETEST ===")
+  (KG-Say "=== RDBPASTETEST ===")
   (princ "\nСкопируйте мастер-блок в исходном файле, затем нажмите Enter.")
   (getstring "\nEnter для продолжения: ")
   (setq snap (KG-SnapshotDrawing))
@@ -6517,7 +6552,7 @@
                         (KG-CdrCI "eff" (KG_EXInstanceHandle h)))))
       ;; Команда диагностическая, поэтому свою вставку убирает сама.
       ;; Копия мастер-версии, оставленная в начале координат, потом
-      ;; попадает в INTEGRATE как лишний экземпляр новой итерации и даёт
+      ;; попадает в RDB как лишний экземпляр новой итерации и даёт
       ;; ложное расхождение счётчика и ложную «потерю».
       (foreach h newinst (KG_EXDeleteInstance h))
       (if newinst
@@ -6532,12 +6567,14 @@
   (KG-ErrorRestore nil)
   (princ)
 )
+(defun C:INTPASTETEST () (C:RDBPASTETEST))
+(defun C:ПДБТЕСТВСТАВКИ () (C:RDBPASTETEST))
 
-;;;--- INTTESTBED: построение тестового стенда (Этап 0) --------------------
+;;;--- RDBTESTBED (INTTESTBED, ПДБСТЕНД): построение тестового стенда (Этап 0)
 ;;; Создаёт СТАТИЧЕСКИЕ блоки с правильными именами. Динамические параметры
 ;;; добавляются вручную в редакторе блоков (LISP не может их создавать).
 
-(defun C:INTTESTBED ( / names nm)
+(defun C:RDBTESTBED ( / names nm)
   (setq names '("ABC1.01(1)Стойка" "ABC1.01(2)Ригель"
                 "ABC1.01(3)Крышка" "ABC1.01(4)"))
   (foreach nm names
@@ -6575,6 +6612,8 @@
   (command "_.REGEN")
   (princ)
 )
+(defun C:INTTESTBED () (C:RDBTESTBED))
+(defun C:ПДБСТЕНД () (C:RDBTESTBED))
 
 ) ; progn
 ) ; if not KG-TESTING
@@ -6582,14 +6621,15 @@
 ;; Список команд в баннере обязан совпадать с реально определёнными:
 ;; в сборке 19 здесь не было INTDBXTEST, и пользователь не мог понять,
 ;; доступна ли команда диагностики.
-(princ (strcat "\nIntegration.lsp, сборка " KG-VERSION
-               ". Команды: INTEGRATE, INTEGRATECHECK, INTDIAG, INTDUMP,"
-               " INTDUMPDEF, INTPASTETEST, INTTESTBED, INTDBXTEST,"
-               " INTRENAMETEST, INTCLEANUP, INTCOUNT, INTBRIEF, INTERR."
+(princ (strcat "\nRepDblock.lsp, сборка " KG-VERSION
+               ". Команды: RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE), RDBCHECK (INTEGRATECHECK), RDBDIAG (INTDIAG),"
+               " RDBDUMP (INTDUMP), RDBDUMPDEF (INTDUMPDEF), RDBPASTETEST (INTPASTETEST), RDBTESTBED (INTTESTBED),"
+               " RDBDBXTEST (INTDBXTEST), RDBRENAMETEST (INTRENAMETEST), RDBCLEANUP (INTCLEANUP), RDBCOUNT (INTCOUNT),"
+               " RDBBRIEF (INTBRIEF), RDBERR (INTERR)."
                " Ename определения: tblobjname, tblsearch (-2), "
                "tblsearch (-1), COM. "
                " Приборка сбора вхождений, шаг 2. "
-               "INTBRIEF показывает вставки без определения. "
+               "RDBBRIEF показывает вставки без определения. "
                "Отчёт показывает экземпляры семейства "
                "и сравнивает модель с вставками. "
                 "Отказ не обрывает команду; обход карты помечен каждые 200 объектов. "

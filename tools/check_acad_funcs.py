@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-check_acad_funcs.py -- проверка, что в Integration.lsp нет вызовов функций,
+check_acad_funcs.py -- проверка, что в RepDblock.lsp нет вызовов функций,
 которых в AutoCAD не существует.
 
 Повод: на реальном чертеже INTEGRATE упал с "no function definition: SORT".
@@ -19,7 +19,7 @@ check_acad_funcs.py -- проверка, что в Integration.lsp нет выз
 вызовами не считаются.
 
 Запуск:  python3 tools/check_acad_funcs.py [файл ...]
-По умолчанию проверяется Integration.lsp.
+По умолчанию проверяется RepDblock.lsp.
 """
 
 import os
@@ -278,7 +278,7 @@ def scan(path):
 
 
 def main():
-    paths = sys.argv[1:] or [os.path.join(ROOT, "Integration.lsp")]
+    paths = sys.argv[1:] or [os.path.join(ROOT, "RepDblock.lsp")]
     failed = False
     for path in paths:
         bad_calls, bad_syms, bad_lambdas, ncalls, ndefs = scan(path)
