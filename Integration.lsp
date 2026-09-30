@@ -149,7 +149,10 @@
 ;; Сколько вложенных вставок при снятии осталось без состояния видимости.
 (if (not (boundp 'KG-NESTDROP)) (setq KG-NESTDROP 0))
 
-(setq KG-VERSION "65")
+;; План интеграции (семейство, варианты, вложенные).
+(if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
+
+(setq KG-VERSION "66")
 
 (vl-load-com)
 
@@ -1736,31 +1739,101 @@
   (list ok nf bad bad2 (reverse det))
 )
 
+;; Поиск сохранённых состояний вложенных динамических блоков для варианта семейства.
+;; Источники:
+;; 1. Экземпляры этого варианта из плана интеграции (groups / instances).
+;; 2. Старые определения этого варианта из снимка KG-NESTSAVE.
+(defun KG-FindVariantNestedStates (base v plan / groups grp pr inst st p hit)
+  (setq st nil hit nil)
+  ;; 1. Из групп экземпляров плана
+  (if (and plan (assoc "scan" plan))
+    (progn
+      (setq groups (cdr (assoc "groups" (cdr (assoc "scan" plan)))))
+      (setq grp (vl-some '(lambda (g) (if (KG-StrEq (car g) v) g nil)) groups))
+      (if grp
+        (progn
+          (setq pr (car (cdr grp)))
+          (if pr
+            (progn
+              (setq inst (car pr))
+              (if inst
+                (setq st (KG-CdrCI "nested-vis" inst))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  ;; 1b. Из списка всех старых экземпляров плана (если группы не дали)
+  (if (and (null st) plan (assoc "instances" plan))
+    (foreach pr (cdr (assoc "instances" plan))
+      (if (and (null st) (KG-StrEq (nth 2 (cdr pr)) v))
+        (setq st (KG-CdrCI "nested-vis" (car pr)))
+      )
+    )
+  )
+  ;; 2. Если вхождения не дали состояний (или экземпляров не было), ищем в KG-NESTSAVE
+  (if (and (null st) KG-NESTSAVE)
+    (foreach entry KG-NESTSAVE
+      (if (not hit)
+        (progn
+          (setq p (KG-ParseBlockName (car entry)))
+          (if (and p (KG-StrEq (nth 0 p) base) (KG-StrEq (nth 2 p) v))
+            (setq hit (cdr entry))
+          )
+        )
+      )
+    )
+  )
+  (if st st hit)
+)
+
 ;; Одно определение из списка переименований. Отдельная функция по той же
 ;; причине, что KG-RewirePairOf: лямбда, цитирующая локальную переменную
 ;; цикла, подставляется ненадёжно, и вызов молча отдаёт запасное значение.
 ;;
 ;; Шестой элемент результата -- имя определения, когда в него хоть что-то
 ;; возвращено: отчёт должен называть определения, а не только количество.
-(defun KG-RestoreVisOfPair (r / nm st res)
+(defun KG-RestoreVisOfPair (r / nm st res p base variant cand targetnm curplan)
   (setq nm (KG-AsString (nth 0 r)))
   (setq st (KG-CdrCI nm KG-NESTSAVE))
-  ;; Определение ищется под ПРЕЖНИМ именем: под ним оно живёт после того, как
-  ;; из буфера пришло новое содержимое.
-  ;;
-  ;; Определения по схеме семейства обрабатываются НАРАВНЕ с остальными.
-  ;; Прежняя версия их пропускала: казалось, что состояниям семейства
-  ;; довольно переноса по экземплярам в шаге замены. Это неверно -- шаг замены
-  ;; пишет в анонимное представление *U живого экземпляра, а содержимое самого
-  ;; определения остаётся таким, каким пришло из буфера. Поэтому при открытии
-  ;; блока для редактирования показывалось состояние мастер-блока, хотя сам
-  ;; экземпляр в модели был правильным. Два разных объекта, и писать надо в оба.
-  (if (and st (KG_EXDefExists nm))
+  (setq curplan (if (and (boundp 'plan) plan) plan KG-PLAN))
+  ;; Определение может существовать под прежним именем (например, блок без
+  ;; версии «Закладная в полость стойки»).
+  ;; Если определение под прежним именем не существует, но имя принадлежит
+  ;; старому варианту семейства, ищем новое определение варианта новой итерации.
+  (setq targetnm
+    (cond
+      ((KG_EXDefExists nm) nm)
+      (curplan
+       (setq p (KG-ParseBlockName nm))
+       (if (and p (KG-StrEq (nth 0 p) (cdr (assoc "family" curplan))))
+         (progn
+           (setq variant (nth 2 p))
+           (setq cand (KG-MakeName (nth 0 p) (cdr (assoc "newiter" curplan)) variant))
+           (if (and (/= (KG-AsString variant) "") (KG_EXDefExists cand)) cand nil)
+         )
+         nil
+       ))
+      (t nil)
+    ))
+  (if (and targetnm (KG_EXDefExists targetnm))
     (progn
-      (setq res (KG-RestoreNestedVisOne nm st))
-      (if (> (KG-AsNum (nth 0 res) 0) 0)
-        (append res (list nm))
-        res
+      (if (null st)
+        (if (and curplan (setq p (KG-ParseBlockName targetnm)))
+          (setq st (KG-FindVariantNestedStates (nth 0 p) (nth 2 p) curplan))
+        )
+      )
+      (if st
+        (progn
+          (setq res (KG-RestoreNestedVisOne targetnm st))
+          (if (> (KG-AsNum (nth 0 res) 0) 0)
+            (append res (list targetnm))
+            res
+          )
+        )
+        (list 0 0 0 0 nil)
       )
     )
     (list 0 0 0 0 nil)
@@ -1768,15 +1841,14 @@
 )
 
 ;; Шаг 8в. Вернуть состояния видимости вложенных блоков определениям, которые
-;; были подменены пришедшими из буфера.
-;;
-;; Обрабатываются только переименованные пары: определение, которого буфер не
-;; принёс, вернулось на место нетронутым, писать в него нечего.
+;; были подменены пришедшими из буфера, а также определениям вариантов семейства.
 (defun KG-Step_RestoreNestedVis (renames / r res restored notfound failed
-                                         unconf ndefs defs dets n)
+                                         unconf ndefs defs dets n curplan
+                                         base newiter allvars v nm st)
   (setq restored 0 notfound 0 failed 0 unconf 0 ndefs 0)
   (setq defs nil dets nil)
   (setq n 0)
+  ;; 1. Обработка переименованных определений
   (foreach r renames
     (if (and (> (length renames) 100) (= (rem n 100) 0))
       (KG-Mark (strcat "возврат состояний: пройдено " (itoa n) " из "
@@ -1784,17 +1856,66 @@
     )
     (setq n (1+ n))
     (setq res (KG-RestoreVisOfPair r))
-    (setq restored (+ restored (KG-AsNum (nth 0 res) 0)))
-    (setq notfound (+ notfound (KG-AsNum (nth 1 res) 0)))
-    (setq failed (+ failed (KG-AsNum (nth 2 res) 0)))
-    (setq unconf (+ unconf (KG-AsNum (nth 3 res) 0)))
     (if (nth 5 res)
+      (if (not (member (nth 5 res) defs))
+        (progn
+          (setq restored (+ restored (KG-AsNum (nth 0 res) 0)))
+          (setq notfound (+ notfound (KG-AsNum (nth 1 res) 0)))
+          (setq failed (+ failed (KG-AsNum (nth 2 res) 0)))
+          (setq unconf (+ unconf (KG-AsNum (nth 3 res) 0)))
+          (setq ndefs (1+ ndefs))
+          (setq defs (cons (nth 5 res) defs))
+          (if (nth 4 res) (setq dets (append dets (nth 4 res))))
+        )
+      )
       (progn
-        (setq ndefs (1+ ndefs))
-        (setq defs (cons (nth 5 res) defs))
+        (setq restored (+ restored (KG-AsNum (nth 0 res) 0)))
+        (setq notfound (+ notfound (KG-AsNum (nth 1 res) 0)))
+        (setq failed (+ failed (KG-AsNum (nth 2 res) 0)))
+        (setq unconf (+ unconf (KG-AsNum (nth 3 res) 0)))
+        (if (nth 4 res) (setq dets (append dets (nth 4 res))))
       )
     )
-    (if (nth 4 res) (setq dets (append dets (nth 4 res))))
+  )
+  ;; 2. Дополнительная проверка всех определений вариантов семейства из плана
+  (setq curplan (if (and (boundp 'plan) plan) plan KG-PLAN))
+  (if curplan
+    (progn
+      (setq base (cdr (assoc "family" curplan)))
+      (setq newiter (cdr (assoc "newiter" curplan)))
+      (setq allvars
+        (KG-Unique
+          (append (cdr (assoc "variants-to-create" curplan))
+                  (cdr (assoc "variants-existing" curplan)))))
+      (foreach v allvars
+        (if (and v (/= (KG-AsString v) ""))
+          (progn
+            (setq nm (KG-MakeName base newiter v))
+            (if (and (KG_EXDefExists nm) (not (member nm defs)))
+              (progn
+                (setq st (KG-FindVariantNestedStates base v curplan))
+                (if st
+                  (progn
+                    (setq res (KG-RestoreNestedVisOne nm st))
+                    (if (> (KG-AsNum (nth 0 res) 0) 0)
+                      (progn
+                        (setq restored (+ restored (KG-AsNum (nth 0 res) 0)))
+                        (setq notfound (+ notfound (KG-AsNum (nth 1 res) 0)))
+                        (setq failed (+ failed (KG-AsNum (nth 2 res) 0)))
+                        (setq unconf (+ unconf (KG-AsNum (nth 3 res) 0)))
+                        (setq ndefs (1+ ndefs))
+                        (setq defs (cons nm defs))
+                        (if (nth 4 res) (setq dets (append dets (nth 4 res))))
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
   )
   (KG-Mark (strcat "возвращено состояний вложенных блоков: "
                    (KG-NumStr restored) " в определениях "
@@ -2876,14 +2997,25 @@
   )
 )
 
-(defun KG-Step_CreateVariants (plan / base newiter out nm)
+(defun KG-Step_CreateVariants (plan / base newiter out nm st)
   (setq base (cdr (assoc "family" plan)))
   (setq newiter (cdr (assoc "newiter" plan)))
   (setq out nil)
   (foreach v (cdr (assoc "variants-to-create" plan))
     (setq nm (KG-MakeName base newiter v))
     (if (KG_EXCreateDefFromMaster nm (cdr (assoc "master" plan)))
-      (setq out (cons nm out))
+      (progn
+        (setq out (cons nm out))
+        ;; Устанавливаем состояния вложенных динамических блоков в определение варианта
+        (if (and (/= (KG-AsString v) "") (KG_EXDefExists nm))
+          (progn
+            (setq st (KG-FindVariantNestedStates base v plan))
+            (if st
+              (KG-Safe '(lambda () (KG-RestoreNestedVisOne nm st)) nil)
+            )
+          )
+        )
+      )
       (princ (strcat "\nОШИБКА: невозможно создать вариант \"" nm "\"."))
     )
   )
@@ -3496,6 +3628,7 @@
       ;; и план решает, что обновлять нечего. Именно так на реальном
       ;; чертеже получилось «Обновлено вложенных: 0» при 42 «новых».
       (setq plan (KG-BuildIntegrationMap model mastername beforedefs))
+      (setq KG-PLAN plan)
       ;; 6. что из вложенных определений реально пришло
       (setq missing nil)
       (foreach v (cdr (assoc "nested-all" plan))
@@ -5910,6 +6043,7 @@
   (setq KG-DO-PASTE nil)
   (setq KG-PRERENAMES nil)
   (setq KG-PREDEFS nil)
+  (setq KG-PLAN nil)
   (setq KG-ARRIVED nil)
   (setq KG-PRE-CANDIDATES 0)
   (setq KG-FREED-N 0)

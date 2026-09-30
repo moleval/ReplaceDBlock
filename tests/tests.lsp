@@ -2978,6 +2978,8 @@
   (setq KG-NESTSAVE nil)
   (setq KG-NESTSAVEN 0)
   (setq T22-EXIST (list "Обойма" "Пустышка" "Комплект КП50 v1.5"
+                        "Комплект КП50 v1.51 стойка КП45387"
+                        "Комплект КП50 v1.51 стойка КП45303-2"
                         "Щиток"))
   (setq T22-CALLS nil)
   ;; COM-чтение свойств: у «Обоймы» два вложенных блока, у «Пустышки» их нет.
@@ -2993,7 +2995,9 @@
   (defun KG-DefInsertByName (defname nestedname / )
     (if (and (KG-StrEq nestedname "Втулка")
              (or (KG-StrEq defname "Обойма")
-                 (KG-StrEq defname "Комплект КП50 v1.5")))
+                 (KG-StrEq defname "Комплект КП50 v1.5")
+                 (KG-StrEq defname "Комплект КП50 v1.51 стойка КП45387")
+                 (KG-StrEq defname "Комплект КП50 v1.51 стойка КП45303-2")))
       "EO1"
       nil))
   (setq T22-SET nil)
@@ -3119,6 +3123,42 @@
            (strcat (itoa (nth 0 T22-R)) "/" (itoa (nth 1 T22-R)) "/"
                    (itoa (nth 2 T22-R)))
            "0/0/0")
+
+  ;; 22g. Старая итерация варианта семейства v1.1 в renames сопоставляется
+  ;;      с созданным определением новой итерации v1.51.
+  (T22-SetDb)
+  (setq plan (list (cons "family" "Комплект КП50")
+                   (cons "newiter" "1.51")
+                   (cons "variants-to-create" (list "стойка КП45387"))
+                   (cons "variants-existing" nil)))
+  (setq KG-NESTSAVE
+    (list (cons "Комплект КП50 v1.1 стойка КП45387"
+                (list (cons "Втулка" "Открыто")))))
+  (setq T22-CALLS nil)
+  (setq T22-R (KG-Step_RestoreNestedVis
+                (list (list "Комплект КП50 v1.1 стойка КП45387"
+                            "Комплект КП50 v1.1 стойка КП45387~до1.51"))))
+  (T-EqInt "T22.21 состояние возвращено в определение варианта v1.51"
+           (nth 0 T22-R) 1)
+  (T-EqInt "T22.22 обработано 1 определение" (nth 4 T22-R) 1)
+  (T-EqStr "T22.23 определение варианта названо"
+           (car (nth 5 T22-R)) "Комплект КП50 v1.51 стойка КП45387")
+  (T-EqStr "T22.24 записано состояние вложенного блока варианта"
+           (KG-JoinNames (reverse T22-CALLS)) "EO1=Открыто")
+
+  ;; 22h. Поиск состояний варианта через KG-FindVariantNestedStates
+  (setq p-plan
+    (list (cons "family" "Комплект КП50")
+          (cons "newiter" "1.51")
+          (cons "scan"
+            (list (cons "groups"
+              (list (cons "стойка КП45387"
+                (list (cons (list (cons "nested-vis" (list (cons "Стойка КП50" "КП45387"))))
+                            (list "Комплект КП50" "1.1" "стойка КП45387"))))))))))
+  (T-EqStr "T22.25 состояние варианта найдено из групп плана"
+           (cdr (car (KG-FindVariantNestedStates "Комплект КП50" "стойка КП45387" p-plan)))
+           "КП45387")
+  (setq plan nil)
 )
 
 ;;;---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ AutoLISP + COM для AutoCAD. Команда `INTEGRATE` берёт из буф
 вложенные определения по всему чертежу, сохраняет видимость вложенных блоков
 и не теряет суффиксы вариантов.
 
-Текущая сборка: **65**.
+Текущая сборка: **66**.
 
 ## Состав
 
@@ -46,7 +46,7 @@ AutoLISP, который исполняет реальный `Integration.lsp` �
 загружается.
 
 ```
-python3 tests/run_tests.py         # 582 проверки
+python3 tests/run_tests.py         # 587 проверок
 python3 tests/run_space_tests.py   # 46 проверок
 python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён
 python3 tools/lint_parens.py Integration.lsp
