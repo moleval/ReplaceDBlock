@@ -1,0 +1,10 @@
+; Скрипт прогона для AutoCAD. Запуск: SCRIPT -> этот файл.
+; Путь в первой строке поправьте под себя.
+(load "Integration.lsp")
+(setq KG-TRACE t)
+INTCOUNT
+INTEGRATE
+INTCOUNT
+INTBRIEF
+INTERR
+(setq KG-TRACE nil)
