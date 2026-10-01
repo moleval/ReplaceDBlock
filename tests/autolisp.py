@@ -51,6 +51,12 @@ SELF_EVALUATING = {
     "PI": math.pi,
     ":VLAX-TRUE": 1,
     ":VLAX-FALSE": None,
+    "VLAX-VBSTRING": 8,
+    "VLAX-VBDOUBLE": 5,
+    "VLAX-VBLONG": 3,
+    "VLAX-VBINTEGER": 2,
+    "VLAX-TRUE": 1,
+    "VLAX-FALSE": None,
 }
 
 
@@ -708,6 +714,14 @@ class Interpreter:
         # --- ошибки ---
         d("vl-catch-all-error-p", lambda v=NIL: sym("T") if isinstance(v, CatchAllError) else NIL)
         d("vl-catch-all-error-message", lambda v=NIL: v.message if isinstance(v, CatchAllError) else "")
+
+        # --- COM / variants ---
+        d("vlax-make-variant", lambda val=None, vtype=None: val)
+        d("vlax-variant-value", lambda val=None: val)
+        d("vlax-put-property", lambda obj, prop, val: val)
+        d("vlax-get-property", lambda obj, prop: getattr(obj, str(prop).lower(), NIL))
+        d("vlax-put", lambda obj, prop, val: val)
+        d("vlax-get", lambda obj, prop: getattr(obj, str(prop).lower(), NIL))
 
 
 # --------------------------------------------------------------------------- 

@@ -157,7 +157,7 @@
 ;; План интеграции (семейство, варианты, вложенные).
 (if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
 
-(setq KG-VERSION "68")
+(setq KG-VERSION "69")
 
 (vl-load-com)
 
@@ -3310,8 +3310,8 @@
 )
 
 ;; Шаг 4. Перепривязать оставшиеся вложенные вхождения (те, что живут
-;; внутри сторонних определений) на новые определения.
-(defun KG-Step_RewireNested (model renames / tgt n eff h dyn nv att)
+;; внутри сторонних определений) и отдельно стоящие экземпляры на новые определения.
+(defun KG-Step_RewireNested (model renames / tgt n eff h dyn nv att sp e newh)
   (setq n 0)
   (foreach r renames
     (setq tgt (nth 0 r))
@@ -3320,23 +3320,34 @@
       (if (KG-StrEq eff (nth 1 r))
         (progn
           (setq h (KG-CdrCI "handle" ins))
-          (if (KG_EXSetEffectiveName h tgt)
+          (setq sp (KG-CdrCI "space" ins))
+          (if (and sp (/= (KG-AsString sp) "") (not (KG-StrEq (KG-AsString sp) "nil"))
+                   (not KG-TESTING) (handent (KG-AsString h)))
+            ;; Это экземпляр на чертеже (в модели или на листе) -- пересоздаём его на месте
+            ;; с новым определением и полным переносом динамических свойств и видимости!
             (progn
-              ;; Восстанавливаем динамические свойства, вложенную видимость и атрибуты,
-              ;; так как смена определения сбрасывает их в умолчания
-              (setq dyn (KG-CdrCI "dyn-props" ins))
-              (if dyn (KG_EXRestoreDynProps h dyn))
-              (setq nv (KG-CdrCI "nested-vis" ins))
-              (if nv
-                (foreach pair nv
-                  (KG_EXSetNestedVisibility h (car pair) (cdr pair))
+              (setq e (handent (KG-AsString h)))
+              (setq newh (KG-RecreateInstanceSamePlace e tgt))
+              (if newh (setq n (1+ n)))
+            )
+            ;; Это вложенное вхождение внутри определения блока (или режим тестирования)
+            (if (KG_EXSetEffectiveName h tgt)
+              (progn
+                ;; Восстанавливаем динамические свойства, вложенную видимость и атрибуты
+                (setq dyn (KG-CdrCI "dyn-props" ins))
+                (if dyn (KG_EXRestoreDynProps h dyn))
+                (setq nv (KG-CdrCI "nested-vis" ins))
+                (if nv
+                  (foreach pair nv
+                    (KG_EXSetNestedVisibility h (car pair) (cdr pair))
+                  )
                 )
+                (setq att (KG-CdrCI "attrs" ins))
+                (if (and att (not KG-TESTING) (handent (KG-AsString h)))
+                  (KG-Safe '(lambda () (KG-SetAttributeValues (vlax-ename->vla-object (handent (KG-AsString h))) att)) nil)
+                )
+                (setq n (1+ n))
               )
-              (setq att (KG-CdrCI "attrs" ins))
-              (if (and att (not KG-TESTING) (handent (KG-AsString h)))
-                (KG-Safe '(lambda () (KG-SetAttributeValues (vlax-ename->vla-object (handent (KG-AsString h))) att)) nil)
-              )
-              (setq n (1+ n))
             )
           )
         )
@@ -4546,11 +4557,21 @@
 )
 
 ;; Установить состояние видимости
-(defun KG-SetVisibilityState (obj val / p r)
+(defun KG-SetVisibilityState (obj val / p r vval)
   (setq p (KG-VisibilityPropertyOf obj))
   (if p
     (progn
-      (setq r (vl-catch-all-apply '(lambda () (vlax-put-property p 'Value val))))
+      (setq vval (vl-catch-all-apply '(lambda () (vlax-variant-value val))))
+      (if (or (KG-IsErr vval) (null vval)) (setq vval val))
+      ;; Параметр видимости всегда строковый: передаём variant vbString
+      (setq r (vl-catch-all-apply
+                '(lambda () (vlax-put-property p 'Value (vlax-make-variant (KG-AsString vval) vlax-vbString)))))
+      (if (KG-IsErr r)
+        (setq r (vl-catch-all-apply '(lambda () (vlax-put p 'Value (KG-AsString vval))))))
+      (if (KG-IsErr r)
+        (setq r (vl-catch-all-apply '(lambda () (vlax-put-property p 'Value val)))))
+      (if (KG-IsErr r)
+        (setq r (vl-catch-all-apply '(lambda () (vlax-put-property p 'Value vval)))))
       (not (KG-IsErr r))
     )
     nil
@@ -5351,26 +5372,34 @@
 )
 
 ;; Смена эффективного имени вхождения (перепривязка на другое определение)
-(defun KG_EXSetEffectiveName (handle defname / e obj r)
+(defun KG_EXSetEffectiveName (handle defname / e obj r sp)
   (setq e (handent (KG-AsString handle)))
   (if (null e)
     nil
     (progn
       (setq obj (vlax-ename->vla-object e))
-      (setq r (vl-catch-all-apply '(lambda () (vla-put-Name obj defname))))
-      (if (KG-IsErr r)
-        ;; запасной путь: пересоздать вхождение
-        (KG-RecreateInstanceSamePlace e defname)
-        t
+      (setq sp (KG-Safe '(lambda () (KG-SpaceOf e)) nil))
+      (if (and sp (/= (KG-AsString sp) "") (not (KG-StrEq (KG-AsString sp) "nil")))
+        ;; На чертеже: пересоздаём экземпляр для сохранения динамических свойств и *U
+        (if (KG-RecreateInstanceSamePlace e defname) t nil)
+        ;; Внутри определения блока: перепривязываем имя
+        (progn
+          (setq r (vl-catch-all-apply '(lambda () (vla-put-Name obj defname))))
+          (if (KG-IsErr r)
+            (if (KG-RecreateInstanceSamePlace e defname) t nil)
+            t
+          )
+        )
       )
     )
   )
 )
 
 ;; Пересоздать вхождение на месте с другим определением
-(defun KG-RecreateInstanceSamePlace (e defname / obj m h dyn nv)
+(defun KG-RecreateInstanceSamePlace (e defname / obj m h dyn nv att oldh)
   (setq obj (vlax-ename->vla-object e))
   (setq m (KG-InstanceModel obj e))
+  (setq oldh (cdr (assoc 5 (entget e))))
   (setq h (KG_EXCreateInstance defname m))
   (if h
     (progn
@@ -5382,7 +5411,11 @@
           (KG_EXSetNestedVisibility h (car pair) (cdr pair))
         )
       )
-      (KG_EXDeleteInstance (cdr (assoc 5 (entget e))))
+      (setq att (KG-CdrCI "attrs" m))
+      (if (and att (handent (KG-AsString h)))
+        (KG-Safe '(lambda () (KG-SetAttributeValues (vlax-ename->vla-object (handent (KG-AsString h))) att)) nil)
+      )
+      (if oldh (KG_EXDeleteInstance oldh))
     )
   )
   h
@@ -5419,9 +5452,26 @@
             (setq pnm (vl-catch-all-apply '(lambda () (vla-get-PropertyName p))))
             (if (and (not (KG-IsErr pnm)) (KG-StrEq pnm nm))
               (progn
-                ;; Записываем значение свойства
+                ;; 1. Исходный variant (если сохранился)
                 (setq r (vl-catch-all-apply
                           '(lambda () (vlax-put-property p 'Value val))))
+                ;; 2. Строковый variant (для параметров видимости и текстовых lookup)
+                (if (and (KG-IsErr r) (or (= (type vval) 'STR) (null (type vval))))
+                  (setq r (vl-catch-all-apply
+                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant (KG-AsString vval) vlax-vbString))))))
+                ;; 3. Вещественный variant (для длин, расстояний, углов)
+                (if (and (KG-IsErr r) (= (type vval) 'REAL))
+                  (setq r (vl-catch-all-apply
+                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbDouble))))))
+                ;; 4. Целочисленный variant
+                (if (and (KG-IsErr r) (= (type vval) 'INT))
+                  (setq r (vl-catch-all-apply
+                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbLong))))))
+                ;; 5. Автоматический маршалинг vlax-put
+                (if (KG-IsErr r)
+                  (setq r (vl-catch-all-apply
+                            '(lambda () (vlax-put p 'Value vval)))))
+                ;; 6. Прямое распакованное значение
                 (if (KG-IsErr r)
                   (setq r (vl-catch-all-apply
                             '(lambda () (vlax-put-property p 'Value vval)))))
