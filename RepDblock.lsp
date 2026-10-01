@@ -157,7 +157,7 @@
 ;; План интеграции (семейство, варианты, вложенные).
 (if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
 
-(setq KG-VERSION "67")
+(setq KG-VERSION "68")
 
 (vl-load-com)
 
@@ -477,6 +477,27 @@
   )
 )
 
+;; Позиция подстроки в строке (1-based, без учёта регистра), nil если не найдено
+(defun KG-StrPos (sub s / i n m found)
+  (setq s (KG-AsString s))
+  (setq sub (KG-AsString sub))
+  (if (or (= s "") (= sub ""))
+    nil
+    (progn
+      (setq n (strlen s))
+      (setq m (strlen sub))
+      (setq i 1 found nil)
+      (while (and (not found) (<= i (1+ (- n m))))
+        (if (= (strcase (substr s i m)) (strcase sub))
+          (setq found i)
+          (setq i (1+ i))
+        )
+      )
+      found
+    )
+  )
+)
+
 (defun KG-TrimLeft (s / n i)
   (setq s (KG-AsString s))
   (if (= s "") ""
@@ -629,11 +650,11 @@
 ;; «Стойка КП50~до», а в новом определении вложенный блок называется
 ;; «Стойка КП50». Без снятия суффикса ни одно состояние вложенного блока
 ;; не переносилось: «В новой версии такого вложенного блока нет».
-(defun KG-StripDoSuffix (nm / s n)
+(defun KG-StripDoSuffix (nm / s pos)
   (setq s (KG-AsString nm))
-  (setq n (strlen s))
-  (if (and (> n 3) (KG-StrEq (substr s (1+ (- n 3)) 3) "~до"))
-    (substr s 1 (- n 3))
+  (setq pos (KG-StrPos "~до" s))
+  (if pos
+    (substr s 1 (1- pos))
     s
   )
 )
@@ -807,12 +828,12 @@
 (defun KG-ParseVariant   (name / p) (setq p (KG-ParseBlockName name)) (if p (nth 2 p) nil))
 
 (defun KG-IsFamilyName (name base / p)
-  (setq p (KG-ParseBlockName name))
+  (setq p (KG-ParseBlockName (KG-StripDoSuffix name)))
   (and p (KG-StrEq (nth 0 p) base))
 )
 
 (defun KG-IsIntegrationName (name base iter / p)
-  (setq p (KG-ParseBlockName name))
+  (setq p (KG-ParseBlockName (KG-StripDoSuffix name)))
   (and p (KG-StrEq (nth 0 p) base) (KG-IterEq (nth 1 p) iter))
 )
 
@@ -1031,10 +1052,12 @@
 )
 
 ;; Все экземпляры семейства base во всём файле: (cons inst parsed)
-(defun KG-FindFamilyInstances (model base / out p)
+(defun KG-FindFamilyInstances (model base / out p eff)
   (setq out nil)
   (foreach ins (KG-ModelInsts model)
-    (setq p (KG-ParseBlockName (KG-CdrCI "eff" ins)))
+    (setq eff (KG-CdrCI "eff" ins))
+    (setq p (KG-ParseBlockName eff))
+    (if (not p) (setq p (KG-ParseBlockName (KG-StripDoSuffix eff))))
     (if (and p (KG-StrEq (nth 0 p) base))
       (setq out (cons (cons ins p) out))
     )
@@ -2475,7 +2498,9 @@
   (setq left (length pairs))
   (setq newpairs nil)
   (foreach ins (KG-ModelInsts model)
-    (if (KG-IsIntegrationName (KG-CdrCI "eff" ins) base newiter)
+    (if (and (KG-IsIntegrationName (KG-CdrCI "eff" ins) base newiter)
+             (not (KG-StrContains (KG-CdrCI "eff" ins) "~до"))
+             (not (KG-StrContains (KG-CdrCI "def" ins) "~до")))
       (setq newpairs (cons (cons ins (KG-ParseBlockName (KG-CdrCI "eff" ins)))
                            newpairs))
     )
@@ -3286,15 +3311,34 @@
 
 ;; Шаг 4. Перепривязать оставшиеся вложенные вхождения (те, что живут
 ;; внутри сторонних определений) на новые определения.
-(defun KG-Step_RewireNested (model renames / tgt n eff)
+(defun KG-Step_RewireNested (model renames / tgt n eff h dyn nv att)
   (setq n 0)
   (foreach r renames
     (setq tgt (nth 0 r))
     (foreach ins (KG-ModelInsts model)
       (setq eff (KG-CdrCI "eff" ins))
       (if (KG-StrEq eff (nth 1 r))
-        (if (KG_EXSetEffectiveName (KG-CdrCI "handle" ins) tgt)
-          (setq n (1+ n))
+        (progn
+          (setq h (KG-CdrCI "handle" ins))
+          (if (KG_EXSetEffectiveName h tgt)
+            (progn
+              ;; Восстанавливаем динамические свойства, вложенную видимость и атрибуты,
+              ;; так как смена определения сбрасывает их в умолчания
+              (setq dyn (KG-CdrCI "dyn-props" ins))
+              (if dyn (KG_EXRestoreDynProps h dyn))
+              (setq nv (KG-CdrCI "nested-vis" ins))
+              (if nv
+                (foreach pair nv
+                  (KG_EXSetNestedVisibility h (car pair) (cdr pair))
+                )
+              )
+              (setq att (KG-CdrCI "attrs" ins))
+              (if (and att (not KG-TESTING) (handent (KG-AsString h)))
+                (KG-Safe '(lambda () (KG-SetAttributeValues (vlax-ename->vla-object (handent (KG-AsString h))) att)) nil)
+              )
+              (setq n (1+ n))
+            )
+          )
         )
       )
     )
@@ -5324,11 +5368,23 @@
 )
 
 ;; Пересоздать вхождение на месте с другим определением
-(defun KG-RecreateInstanceSamePlace (e defname / obj m h)
+(defun KG-RecreateInstanceSamePlace (e defname / obj m h dyn nv)
   (setq obj (vlax-ename->vla-object e))
   (setq m (KG-InstanceModel obj e))
   (setq h (KG_EXCreateInstance defname m))
-  (if h (KG_EXDeleteInstance (cdr (assoc 5 (entget e)))))
+  (if h
+    (progn
+      (setq dyn (KG-CdrCI "dyn-props" m))
+      (if dyn (KG_EXRestoreDynProps h dyn))
+      (setq nv (KG-CdrCI "nested-vis" m))
+      (if nv
+        (foreach pair nv
+          (KG_EXSetNestedVisibility h (car pair) (cdr pair))
+        )
+      )
+      (KG_EXDeleteInstance (cdr (assoc 5 (entget e))))
+    )
+  )
   h
 )
 
@@ -5345,7 +5401,7 @@
 )
 
 ;; Восстановить динамические свойства верхнего блока
-(defun KG_EXRestoreDynProps (handle dynprops / e obj props p nm val n)
+(defun KG_EXRestoreDynProps (handle dynprops / e obj props p nm val n pnm r vval)
   (setq n 0)
   (setq e (handent (KG-AsString handle)))
   (if (and e dynprops)
@@ -5357,11 +5413,22 @@
         (foreach dp dynprops
           (setq nm (car dp))
           (setq val (cdr dp))
+          (setq vval (vl-catch-all-apply '(lambda () (vlax-variant-value val))))
+          (if (or (KG-IsErr vval) (null vval)) (setq vval val))
           (foreach p props
-            (if (and (= (vl-catch-all-apply '(lambda () (vla-get-PropertyName p))) nm)
-                     (not (vl-catch-all-apply
-                            '(lambda () (vlax-put-property p 'Value val)))))
-              (setq n (1+ n))
+            (setq pnm (vl-catch-all-apply '(lambda () (vla-get-PropertyName p))))
+            (if (and (not (KG-IsErr pnm)) (KG-StrEq pnm nm))
+              (progn
+                ;; Записываем значение свойства
+                (setq r (vl-catch-all-apply
+                          '(lambda () (vlax-put-property p 'Value val))))
+                (if (KG-IsErr r)
+                  (setq r (vl-catch-all-apply
+                            '(lambda () (vlax-put-property p 'Value vval)))))
+                (if (not (KG-IsErr r))
+                  (setq n (1+ n))
+                )
+              )
             )
           )
         )

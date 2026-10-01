@@ -703,6 +703,7 @@ class Interpreter:
         # make-string намеренно НЕ определён: в AutoCAD такой функции нет
         d("wcmatch", _wcmatch)
         d("vl-string-subst", lambda new, old, s: (s or "").replace(old, new))
+        d("vl-string-search", lambda pat, s, start=0: ((s or "")[int(start or 0):].find(pat) + int(start or 0)) if (pat in (s or "")[int(start or 0):]) else NIL)
 
         # --- ошибки ---
         d("vl-catch-all-error-p", lambda v=NIL: sym("T") if isinstance(v, CatchAllError) else NIL)

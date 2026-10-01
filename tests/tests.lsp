@@ -3476,6 +3476,39 @@
   (T-Ok "T25.29 посторонний экземпляр не тронут"
         (not (null (vl-some '(lambda (i) (KG-StrEq (KG-CdrCI "handle" i) "KP1"))
                             (DB-Insts)))))
+
+  ;; 25f. Снятие суффиксов ~до и поиск экземпляров
+  (T-EqStr "T25.30 StripDoSuffix простое имя"
+           (KG-StripDoSuffix "Стойка КП50~до") "Стойка КП50")
+  (T-EqStr "T25.31 StripDoSuffix имя с итерацией"
+           (KG-StripDoSuffix "Стойка~до5") "Стойка")
+  (T-EqStr "T25.32 StripDoSuffix вариант с версией"
+           (KG-StripDoSuffix "Комплект КП50 v1.1 стойка КП45387~до1.51")
+           "Комплект КП50 v1.1 стойка КП45387")
+  (T-Ok "T25.33 IsFamilyName находит семейство у переименованного блока"
+        (KG-IsFamilyName "Стойка КП50~до" "Стойка КП50"))
+  (T-Ok "T25.34 IsFamilyName находит семейство у версионного с ~до"
+        (KG-IsFamilyName "Комплект КП50 v1.1 стойка КП45387~до1.51" "Комплект КП50"))
+
+  ;; 25g. Сохранение свойств при перепривязке (Step_RewireNested)
+  (DB-SetDefs
+    (list
+      (DB-MakeDef "Стойка КП50" nil (list "КП45387" "КП45303-2"))
+      (DB-MakeDef "Стойка КП50~до" nil (list "КП45387" "КП45303-2"))
+    ))
+  (DB-SetInsts
+    (list
+      (KG-SetAssoc "dyn-props" (list (cons "Видимость1" "КП45303-2"))
+        (KG-SetAssoc "attrs" (list (cons "МАРКА" "СТ-1"))
+          (DB-MakeInst "ST1" "Стойка КП50~до" "Стойка КП50~до"
+                       "Model" "0" (list 100.0 200.0 0.0) nil)))
+    ))
+  (KG-Step_RewireNested (KG_DBGetModel) (list (list "Стойка КП50" "Стойка КП50~до")))
+  (setq inst1 (car (DB-Insts)))
+  (T-EqStr "T25.35 перепривязанный экземпляр указывает на новое имя"
+           (KG-CdrCI "eff" inst1) "Стойка КП50")
+  (T-EqStr "T25.36 динамическое свойство сохранено после перепривязки"
+           (KG-AsString (KG-CdrCI "Видимость1" (KG-CdrCI "dyn-props" inst1))) "КП45303-2")
 )
 
 (defun RUN-ALL-TESTS ()
