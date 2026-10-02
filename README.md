@@ -6,7 +6,7 @@ AutoLISP + COM для AutoCAD. Команда `RDB` (алиасы: `RepDblock`, 
 вложенные определения по всему чертежу, сохраняет видимость вложенных блоков
 и не теряет суффиксы вариантов.
 
-Текущая сборка: **67**.
+Текущая сборка: **70**.
 
 ## Состав
 
@@ -57,7 +57,7 @@ AutoLISP, который исполняет реальный `RepDblock.lsp` с 
 загружается.
 
 ```
-python3 tests/run_tests.py         # 616 проверок
+python3 tests/run_tests.py         # 623 проверок
 python3 tests/run_space_tests.py   # 46 проверок
 python3 tests/check_load.py        # файл грузится целиком, раздел 8 определён, 45 команд/алиасов
 python3 tools/lint_parens.py RepDblock.lsp
