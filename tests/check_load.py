@@ -31,11 +31,13 @@ ACAD_PRIMITIVES = [
     "vla-put-Name", "vla-put-Layer", "vla-Delete", "vla-Add", "vla-InsertBlock",
     "vla-get-TagString", "vla-get-TextString", "vla-put-TextString",
     "vla-get-Annotative", "vla-put-Annotative", "vla-get-HasAttributes",
+    "vla-GetAttributes", "vla-GetDynamicBlockProperties",
     "vla-CopyObjects", "vlax-invoke", "vlax-get-property", "vlax-put-property",
     "vlax-property-available-p", "vlax-ename->vla-object",
     "vlax-vla-object->ename", "vlax-3d-point", "vlax-make-safearray",
     "vlax-safearray-put-element", "vlax-safearray-get-element",
-    "vlax-safearray-get-u-bound", "vlax-variant-value", "vlax-for",
+    "vlax-safearray-get-u-bound", "vlax-safearray->list", "vlax-safearrayp",
+    "vlax-variant-value", "vlax-for",
     "vlax-vbobject", "vlax-get-object", "vl-catch-all-apply",
     "vlax-invoke-method", "vla-get-Handle", "vla-get-Layout",
     "vl-catch-all-error-p", "vlax-release-object", "vla-GetInterfaceObject",
@@ -44,7 +46,7 @@ ACAD_PRIMITIVES = [
     "dictsearch", "dictadd", "dictremove",
     "command", "getstring", "getkword", "initget", "wcmatch", "vl-remove-if",
     "vl-remove-if-not", "vl-some", "vl-every", "vl-princ-to-string",
-    "vl-string-subst", "make-string", "chr",
+    "vl-string-subst", "make-string", "chr", "atof",
 ]
 
 
@@ -114,20 +116,20 @@ def main():
 
     # ключевые команды должны существовать
     cmds = [
-        "C:RDB", "C:REPDBLOCK", "C:INTEGRATE",
-        "C:RDBPICK", "C:REPDBLOCKPICK",
-        "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK",
-        "C:RDBDIAG", "C:INTDIAG",
-        "C:RDBDUMP", "C:INTDUMP",
-        "C:RDBDUMPDEF", "C:INTDUMPDEF",
-        "C:RDBPASTETEST", "C:INTPASTSTEST" if False else "C:INTPASTETEST",
-        "C:RDBTESTBED", "C:INTTESTBED",
-        "C:RDBDBXTEST", "C:INTDBXTEST",
-        "C:RDBRENAMETEST", "C:INTRENAMETEST",
-        "C:RDBCLEANUP", "C:INTCLEANUP",
-        "C:RDBCOUNT", "C:INTCOUNT",
-        "C:RDBBRIEF", "C:INTBRIEF",
-        "C:RDBERR", "C:INTERR"
+        "C:RDB", "C:REPDBLOCK", "C:ПОДМЕНАБЛОКА", "C:ПДБ", "C:INTEGRATE",
+        "C:RDBPICK", "C:REPDBLOCKPICK", "C:ПДБВЫБОР",
+        "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK", "C:ПДБЧЕК",
+        "C:RDBDIAG", "C:INTDIAG", "C:ПДБДИАГ",
+        "C:RDBDUMP", "C:INTDUMP", "C:ПДБДАМП",
+        "C:RDBDUMPDEF", "C:INTDUMPDEF", "C:ПДБДАМПОПР",
+        "C:RDBPASTETEST", "C:INTPASTETEST", "C:ПДБТЕСТВСТАВКИ",
+        "C:RDBTESTBED", "C:INTTESTBED", "C:ПДБСТЕНД",
+        "C:RDBDBXTEST", "C:INTDBXTEST", "C:ПДБТЕСТDBX",
+        "C:RDBRENAMETEST", "C:INTRENAMETEST", "C:ПДБТЕСТПЕРЕИМ",
+        "C:RDBCLEANUP", "C:INTCLEANUP", "C:ПДБОЧИСТКА",
+        "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
+        "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
+        "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
     ]
     absent = [c for c in cmds if c not in defined]
     if absent:
