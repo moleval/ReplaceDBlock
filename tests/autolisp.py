@@ -383,8 +383,12 @@ class Interpreter:
             self.evaluate(form, self.globals)
 
     def load_file(self, path):
-        with open(path, encoding="utf-8") as f:
-            self.load_string(f.read(), path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.load_string(f.read(), path)
+        except UnicodeDecodeError:
+            with open(path, encoding="cp1251") as f:
+                self.load_string(f.read(), path)
 
     # -- вычисление --------------------------------------------------------
     def evaluate(self, expr, env):

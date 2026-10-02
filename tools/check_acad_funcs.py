@@ -253,7 +253,10 @@ def collect_bad_lambdas(forms):
 
 
 def scan(path):
-    src = open(path, encoding="utf-8").read()
+    try:
+        src = open(path, encoding="utf-8").read()
+    except UnicodeDecodeError:
+        src = open(path, encoding="cp1251").read()
     forms = parse_all(src)
     calls, syms = set(), set()
     for form in forms:

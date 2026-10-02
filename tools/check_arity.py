@@ -171,7 +171,10 @@ def main():
         return 2
     total_bad = 0
     for path in sys.argv[1:]:
-        text = io.open(path, encoding="utf-8").read()
+        try:
+            text = io.open(path, encoding="utf-8").read()
+        except UnicodeDecodeError:
+            text = io.open(path, encoding="cp1251").read()
         forms = Reader(text).read_all()
         defs = {}
         collect_defs(forms, defs)

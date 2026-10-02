@@ -74,7 +74,10 @@ def main():
     defined = set(k for k, v in interp.globals.items()
                   if isinstance(v, (Function, Builtin)))
 
-    src = open(path, encoding="utf-8").read()
+    try:
+        src = open(path, encoding="utf-8").read()
+    except UnicodeDecodeError:
+        src = open(path, encoding="cp1251").read()
     # имена, которые вызываются в разделе 8
     sec8 = src.split(";;; РАЗДЕЛ 8")[1]
     # строковые литералы не являются вызовами

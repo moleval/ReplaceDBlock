@@ -4,7 +4,10 @@ import sys
 
 
 def scan(path):
-    src = open(path, encoding='utf-8').read()
+    try:
+        src = open(path, encoding='utf-8').read()
+    except UnicodeDecodeError:
+        src = open(path, encoding='cp1251').read()
     stack = []
     line = 1
     i = 0
