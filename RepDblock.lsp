@@ -5667,7 +5667,6 @@
   (princ)
 )
 (defun C:INTDBXTEST () (C:RDBDBXTEST))
-(defun C:ПДБТЕСТDBX () (C:RDBDBXTEST))
 
 ;;;--- RDBRENAMETEST (INTRENAMETEST) ----------------------------------------
 ;;; Проба: сохраняет ли vla-put-Name динамические свойства определения.
@@ -5730,7 +5729,6 @@
   (princ)
 )
 (defun C:INTRENAMETEST () (C:RDBRENAMETEST))
-(defun C:ПДБТЕСТПЕРЕИМ () (C:RDBRENAMETEST))
 
 ;;;--- RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА) ----------------------------------
 ;;; Удалить определения, оставшиеся от интеграции.
@@ -5919,7 +5917,6 @@
   (princ)
 )
 (defun C:INTCLEANUP () (C:RDBCLEANUP))
-(defun C:ПДБОЧИСТКА () (C:RDBCLEANUP))
 
 ;;;--- RDBCOUNT (INTCOUNT, ПДБСЧЁТ) -----------------------------------------
 ;;; Контрольный снимок таблицы блоков: сколько у каждого определения
@@ -5959,7 +5956,6 @@
   (princ)
 )
 (defun C:INTCOUNT () (C:RDBCOUNT))
-(defun C:ПДБСЧЁТ () (C:RDBCOUNT))
 
 ;;;--- RDBBRIEF (INTBRIEF, ПДБКРАТКО) ---------------------------------------
 ;;; Короткая выжимка состояния чертежа: десятки строк вместо полного
@@ -6044,7 +6040,6 @@
   (princ)
 )
 (defun C:INTBRIEF () (C:RDBBRIEF))
-(defun C:ПДБКРАТКО () (C:RDBBRIEF))
 
 ;;;--- RDBERR (INTERR, ПДБОШИБКА) -------------------------------------------
 ;;; Короткий отчёт об ошибке: 5-8 строк, которые помещаются в сообщение
@@ -6075,7 +6070,6 @@
   (princ)
 )
 (defun C:INTERR () (C:RDBERR))
-(defun C:ПДБОШИБКА () (C:RDBERR))
 
 ;;;--- Команды ---------------------------------------------------------------
 
@@ -6163,7 +6157,6 @@
 )
 (defun C:INTEGRATECHECK () (C:RDBCHECK))
 (defun C:REPDBLOCKCHECK () (C:RDBCHECK))
-(defun C:ПДБЧЕК () (C:RDBCHECK))
 
 ;;;--- RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE): полная подмена/интеграция -----
 
@@ -6383,8 +6376,6 @@
   (princ)
 )
 (defun C:REPDBLOCK () (C:RDB))
-(defun C:ПОДМЕНАБЛОКА () (C:RDB))
-(defun C:ПДБ () (C:RDB))
 (defun C:INTEGRATE () (C:RDB))
 
 ;;;--- RDBPICK (REPDBLOCKPICK, ПДБВЫБОР): ручной выбор мастер-блока на чертеже ---
@@ -6441,7 +6432,6 @@
   (princ)
 )
 (defun C:REPDBLOCKPICK () (C:RDBPICK))
-(defun C:ПДБВЫБОР () (C:RDBPICK))
 
 ;; Выбор мастер-блока пользователем (Режим B).
 ;; Возврат nil (Enter без выбора) означает "использовать буфер обмена".
@@ -6599,7 +6589,6 @@
   (princ)
 )
 (defun C:INTDIAG () (C:RDBDIAG))
-(defun C:ПДБДИАГ () (C:RDBDIAG))
 
 
 ;;;--- RDBDUMP (INTDUMP, ПДБДАМП): диагностика экземпляра -------------------
@@ -6649,7 +6638,6 @@
   (princ)
 )
 (defun C:INTDUMP () (C:RDBDUMP))
-(defun C:ПДБДАМП () (C:RDBDUMP))
 
 ;;;--- RDBDUMPDEF (INTDUMPDEF, ПДБДАМПОПР): диагностика определения (Этап 0.5)
 
@@ -6672,7 +6660,6 @@
   (princ)
 )
 (defun C:INTDUMPDEF () (C:RDBDUMPDEF))
-(defun C:ПДБДАМПОПР () (C:RDBDUMPDEF))
 
 ;;;--- RDBPASTETEST (INTPASTETEST, ПДБТЕСТВСТАВКИ): диагностика вставки из буфера (Этап 0.6) -
 ;;; Отвечает на ключевой вопрос этапа: что реально приходит из буфера и
@@ -6737,7 +6724,6 @@
   (princ)
 )
 (defun C:INTPASTETEST () (C:RDBPASTETEST))
-(defun C:ПДБТЕСТВСТАВКИ () (C:RDBPASTETEST))
 
 ;;;--- RDBTESTBED (INTTESTBED, ПДБСТЕНД): построение тестового стенда (Этап 0)
 ;;; Создаёт СТАТИЧЕСКИЕ блоки с правильными именами. Динамические параметры
@@ -6782,7 +6768,35 @@
   (princ)
 )
 (defun C:INTTESTBED () (C:RDBTESTBED))
-(defun C:ПДБСТЕНД () (C:RDBTESTBED))
+
+;; Регистрация русскоязычных алиасов команд через dynamic evaluation:
+;; строковые имена исключают синтаксическую ошибку при загрузке файла
+;; в любой версии и локали AutoCAD.
+(foreach p '(("C:ПОДМЕНАБЛОКА" . C:RDB)
+             ("C:ПДБ" . C:RDB)
+             ("C:ПДБВЫБОР" . C:RDBPICK)
+             ("C:ПДБЧЕК" . C:RDBCHECK)
+             ("C:ПДБДИАГ" . C:RDBDIAG)
+             ("C:ПДБДАМП" . C:RDBDUMP)
+             ("C:ПДБДАМПОПР" . C:RDBDUMPDEF)
+             ("C:ПДБТЕСТВСТАВКИ" . C:RDBPASTETEST)
+             ("C:ПДБСТЕНД" . C:RDBTESTBED)
+             ("C:ПДБТЕСТDBX" . C:RDBDBXTEST)
+             ("C:ПДБТЕСТПЕРЕИМ" . C:RDBRENAMETEST)
+             ("C:ПДБОЧИСТКА" . C:RDBCLEANUP)
+             ("C:ПДБСЧЁТ" . C:RDBCOUNT)
+             ("C:ПДБКРАТКО" . C:RDBBRIEF)
+             ("C:ПДБОШИБКА" . C:RDBERR))
+  (vl-catch-all-apply
+    '(lambda ( / sym target)
+       (setq sym (vl-catch-all-apply 'read (list (car p))))
+       (setq target (cdr p))
+       (if (and (not (KG-IsErr sym)) sym)
+         (eval (list 'defun sym '() (list target)))
+       )
+     )
+  )
+)
 
 ) ; progn
 ) ; if not KG-TESTING

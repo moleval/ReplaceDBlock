@@ -623,6 +623,15 @@ class Interpreter:
                              "LIST" if (is_list(v) or v is None or isinstance(v, Dotted)) else
                              "SYM"))
         d("eval", lambda x: self.evaluate(x, self.globals))
+        def _read(s):
+            if not isinstance(s, str) or not s.strip():
+                return None
+            toks = tokenize(s)
+            if not toks:
+                return None
+            val, _ = parse_one(toks, 0)
+            return val
+        d("read", _read)
         d("vl-load-com", lambda: sym("T"))
 
         # --- арифметика ---
@@ -1103,6 +1112,8 @@ def resolve_quoted(v, env=None):
 
 def split_lambda_list(args):
     """Разбор (a b / c d) -> ([a b], [c d])."""
+    if args is None:
+        args = []
     params = []
     locals_ = []
     seen_slash = False
