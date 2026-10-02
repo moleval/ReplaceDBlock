@@ -111,20 +111,20 @@ def main():
 
     # ключевые команды должны существовать
     cmds = [
-        "C:RDB", "C:REPDBLOCK", "C:ПОДМЕНАБЛОКА", "C:ПДБ", "C:INTEGRATE",
-        "C:RDBPICK", "C:REPDBLOCKPICK", "C:ПДБВЫБОР",
-        "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK", "C:ПДБЧЕК",
-        "C:RDBDIAG", "C:INTDIAG", "C:ПДБДИАГ",
-        "C:RDBDUMP", "C:INTDUMP", "C:ПДБДАМП",
-        "C:RDBDUMPDEF", "C:INTDUMPDEF", "C:ПДБДАМПОПР",
-        "C:RDBPASTETEST", "C:INTPASTETEST", "C:ПДБТЕСТВСТАВКИ",
-        "C:RDBTESTBED", "C:INTTESTBED", "C:ПДБСТЕНД",
-        "C:RDBDBXTEST", "C:INTDBXTEST", "C:ПДБТЕСТDBX",
-        "C:RDBRENAMETEST", "C:INTRENAMETEST", "C:ПДБТЕСТПЕРЕИМ",
-        "C:RDBCLEANUP", "C:INTCLEANUP", "C:ПДБОЧИСТКА",
-        "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
-        "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
-        "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
+        "C:RDB", "C:REPDBLOCK", "C:INTEGRATE",
+        "C:RDBPICK", "C:REPDBLOCKPICK",
+        "C:RDBCHECK", "C:INTEGRATECHECK", "C:REPDBLOCKCHECK",
+        "C:RDBDIAG", "C:INTDIAG",
+        "C:RDBDUMP", "C:INTDUMP",
+        "C:RDBDUMPDEF", "C:INTDUMPDEF",
+        "C:RDBPASTETEST", "C:INTPASTSTEST" if False else "C:INTPASTETEST",
+        "C:RDBTESTBED", "C:INTTESTBED",
+        "C:RDBDBXTEST", "C:INTDBXTEST",
+        "C:RDBRENAMETEST", "C:INTRENAMETEST",
+        "C:RDBCLEANUP", "C:INTCLEANUP",
+        "C:RDBCOUNT", "C:INTCOUNT",
+        "C:RDBBRIEF", "C:INTBRIEF",
+        "C:RDBERR", "C:INTERR"
     ]
     absent = [c for c in cmds if c not in defined]
     if absent:

@@ -6769,35 +6769,6 @@
 )
 (defun C:INTTESTBED () (C:RDBTESTBED))
 
-;; Регистрация русскоязычных алиасов команд через dynamic evaluation:
-;; строковые имена исключают синтаксическую ошибку при загрузке файла
-;; в любой версии и локали AutoCAD.
-(foreach p '(("C:ПОДМЕНАБЛОКА" . C:RDB)
-             ("C:ПДБ" . C:RDB)
-             ("C:ПДБВЫБОР" . C:RDBPICK)
-             ("C:ПДБЧЕК" . C:RDBCHECK)
-             ("C:ПДБДИАГ" . C:RDBDIAG)
-             ("C:ПДБДАМП" . C:RDBDUMP)
-             ("C:ПДБДАМПОПР" . C:RDBDUMPDEF)
-             ("C:ПДБТЕСТВСТАВКИ" . C:RDBPASTETEST)
-             ("C:ПДБСТЕНД" . C:RDBTESTBED)
-             ("C:ПДБТЕСТDBX" . C:RDBDBXTEST)
-             ("C:ПДБТЕСТПЕРЕИМ" . C:RDBRENAMETEST)
-             ("C:ПДБОЧИСТКА" . C:RDBCLEANUP)
-             ("C:ПДБСЧЁТ" . C:RDBCOUNT)
-             ("C:ПДБКРАТКО" . C:RDBBRIEF)
-             ("C:ПДБОШИБКА" . C:RDBERR))
-  (vl-catch-all-apply
-    '(lambda ( / sym target)
-       (setq sym (vl-catch-all-apply 'read (list (car p))))
-       (setq target (cdr p))
-       (if (and (not (KG-IsErr sym)) sym)
-         (eval (list 'defun sym '() (list target)))
-       )
-     )
-  )
-)
-
 ) ; progn
 ) ; if not KG-TESTING
 
@@ -6805,7 +6776,7 @@
 ;; в сборке 19 здесь не было INTDBXTEST, и пользователь не мог понять,
 ;; доступна ли команда диагностики.
 (princ (strcat "\nRepDblock.lsp, сборка " KG-VERSION
-               ". Команды: RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE), RDBCHECK (INTEGRATECHECK), RDBDIAG (INTDIAG),"
+               ". Команды: RDB (RepDblock, INTEGRATE), RDBPICK (REPDBLOCKPICK), RDBCHECK (INTEGRATECHECK, REPDBLOCKCHECK), RDBDIAG (INTDIAG),"
                " RDBDUMP (INTDUMP), RDBDUMPDEF (INTDUMPDEF), RDBPASTETEST (INTPASTETEST), RDBTESTBED (INTTESTBED),"
                " RDBDBXTEST (INTDBXTEST), RDBRENAMETEST (INTRENAMETEST), RDBCLEANUP (INTCLEANUP), RDBCOUNT (INTCOUNT),"
                " RDBBRIEF (INTBRIEF), RDBERR (INTERR)."
