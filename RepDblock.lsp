@@ -157,7 +157,7 @@
 ;; ѕлан интеграции (семейство, варианты, вложенные).
 (if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
 
-(setq KG-VERSION "70")
+(setq KG-VERSION "71")
 
 (vl-load-com)
 
@@ -785,8 +785,8 @@
             (setq digits (cons (substr name i 1) digits))
             (setq i (1- i))
           )
-          (if (or (null digits) (/= (substr name i 1) "("))
-            nil                                ; нет "(÷»‘–џ)" перед ')'
+          (if (or (null digits) (< i 1) (/= (substr name i 1) "("))
+            nil                                ; нет "(÷»‘–џ)" перед ')' (или цифры дошли до начала имени)
             (progn
               (setq base (substr name 1 (1- i)))
               (setq iter (apply 'strcat digits))
@@ -4542,17 +4542,34 @@
 )
 
 ;; »м€ листа по имени блока *Paper_Space*
-(defun KG-LayoutNameFor (blockname / lays lay res)
-  (setq res blockname)
+;; »щетс€ лист, чей блок носит это им€; возвращаетс€ »ћя Ћ»—“ј.
+;; –аньше им€ листа сравнивалось с самим собой и функци€ возвращала
+;; им€ блока: запасной путь KG-SpaceOf отдавал "*Paper_Space" вместо
+;; "Ћист1", а KG_EXCreateInstance по такому имени не находил лист и
+;; уводил новый экземпл€р в ћќƒ≈Ћ№ (живой прогон, 17.10). Ќе найдено --
+;; nil: Ђне удалось определитьї (см. KG-SpaceOf).
+(defun KG-LayoutNameFor (blockname / lays lay res blk bnm)
+  (setq res nil)
   (setq lays (vl-catch-all-apply '(lambda () (vla-get-Layouts (KG-Doc)))))
   (if (not (KG-IsErr lays))
     (vlax-for lay lays
-      (if (KG-StrEq (vl-catch-all-apply '(lambda () (vla-get-Name lay))) res)
-        (setq res (vla-get-Name lay))
+      (if (null res)
+        (progn
+          (setq blk (vl-catch-all-apply '(lambda () (vla-get-Block lay))))
+          (setq bnm
+            (if (or (KG-IsErr blk) (null blk))
+              nil
+              (vl-catch-all-apply '(lambda () (vla-get-Name blk)))
+            )
+          )
+          (if (and bnm (not (KG-IsErr bnm)) (KG-StrEq bnm blockname))
+            (setq res (vl-catch-all-apply '(lambda () (vla-get-Name lay))))
+          )
+        )
       )
     )
   )
-  res
+  (if (KG-IsErr res) nil res)
 )
 
 ;;;--- ѕространство экземпл€ра -----------------------------------------------
@@ -4620,7 +4637,9 @@
               ((wcmatch (strcase (KG-AsString nm)) "`*PAPER_SPACE*")
                (setq lay (vl-catch-all-apply '(lambda () (vla-get-Layout blk))))
                (if (or (KG-IsErr lay) (null lay))
-                 (KG-AsString nm)
+                 ;; им€ блока в карту не пишетс€: потребители принимают
+                 ;; значение карты за им€ листа и увод€т объект в ћќƒ≈Ћ№
+                 nil
                  (progn
                    (setq nm (vl-catch-all-apply '(lambda () (vla-get-Name lay))))
                    (if (KG-IsErr nm) nil (KG-AsString nm)))))
@@ -5265,37 +5284,45 @@
           (t (KG-LayoutBlockForSpace (KG-CdrCI "space" instmodel)))
         )
       )
-      (if (null owner) (setq owner (KG-Model)))
-      ;; все числовые аргументы привод€тс€: (if значение Е) не спасает,
-      ;; когда значение есть, но не число, а nil дал бы Ђfixnump: nilї
-      (setq pt (KG-CdrCI "pos" instmodel))
-      (if (or (null pt) (< (length pt) 3)) (setq pt (list 0.0 0.0 0.0)))
-      (setq newobj
-        (vl-catch-all-apply
-          '(lambda ()
-             (vla-InsertBlock owner
-               (vlax-3d-point (list (KG-AsNum (nth 0 pt) 0.0)
-                                    (KG-AsNum (nth 1 pt) 0.0)
-                                    (KG-AsNum (nth 2 pt) 0.0)))
-               defname
-               (KG-AsNum (KG-CdrCI "sx" instmodel) 1.0)
-               (KG-AsNum (KG-CdrCI "sy" instmodel) 1.0)
-               (KG-AsNum (KG-CdrCI "sz" instmodel) 1.0)
-               (KG-AsNum (KG-CdrCI "rot" instmodel) 0.0))))
-      )
-      (if (KG-IsErr newobj)
+      ;; Ћист по имени не найден: ћќƒ≈Ћ№ Ќ≈ подставл€етс€. “ихий откат
+      ;; в модель уводил экземпл€р с листа в чужое пространство (живой
+      ;; прогон, 17.10); теперь это отказ -- вызывающий оставл€ет
+      ;; старый экземпл€р на месте и сообщает о нЄм.
+      (if (null owner)
         nil
         (progn
-          (vl-catch-all-apply
-            '(lambda () (vla-put-Layer newobj (KG-CdrCI "layer" instmodel))))
-          (if (vlax-property-available-p newobj 'Annotative)
+          ;; все числовые аргументы привод€тс€: (if значение Е) не спасает,
+          ;; когда значение есть, но не число, а nil дал бы Ђfixnump: nilї
+          (setq pt (KG-CdrCI "pos" instmodel))
+          (if (or (null pt) (< (length pt) 3)) (setq pt (list 0.0 0.0 0.0)))
+          (setq newobj
             (vl-catch-all-apply
               '(lambda ()
-                 (vla-put-Annotative newobj
-                   (if (KG-CdrCI "annotative" instmodel) :vlax-true :vlax-false))))
+                 (vla-InsertBlock owner
+                   (vlax-3d-point (list (KG-AsNum (nth 0 pt) 0.0)
+                                        (KG-AsNum (nth 1 pt) 0.0)
+                                        (KG-AsNum (nth 2 pt) 0.0)))
+                   defname
+                   (KG-AsNum (KG-CdrCI "sx" instmodel) 1.0)
+                   (KG-AsNum (KG-CdrCI "sy" instmodel) 1.0)
+                   (KG-AsNum (KG-CdrCI "sz" instmodel) 1.0)
+                   (KG-AsNum (KG-CdrCI "rot" instmodel) 0.0))))
           )
-          (KG-SetAttributeValues newobj (KG-CdrCI "attrs" instmodel))
-          (cdr (assoc 5 (entget (vlax-vla-object->ename newobj))))
+          (if (KG-IsErr newobj)
+            nil
+            (progn
+              (vl-catch-all-apply
+                '(lambda () (vla-put-Layer newobj (KG-CdrCI "layer" instmodel))))
+              (if (vlax-property-available-p newobj 'Annotative)
+                (vl-catch-all-apply
+                  '(lambda ()
+                     (vla-put-Annotative newobj
+                       (if (KG-CdrCI "annotative" instmodel) :vlax-true :vlax-false))))
+              )
+              (KG-SetAttributeValues newobj (KG-CdrCI "attrs" instmodel))
+              (cdr (assoc 5 (entget (vlax-vla-object->ename newobj))))
+            )
+          )
         )
       )
     )

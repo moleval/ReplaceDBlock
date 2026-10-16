@@ -132,9 +132,17 @@ class FakeVariant(object):
 class FakeLayout(object):
     def __init__(self, name):
         self._name = name
+        self._block = None
 
     def get_Name(self):
         return self._name
+
+    def get_Block(self):
+        # у каждого листа есть блок; FakeBlock прописывает
+        # обратную ссылку при создании
+        if self._block is None:
+            raise LispError("у листа нет блока")
+        return self._block
 
 
 class FakeBlock(object):
@@ -144,6 +152,8 @@ class FakeBlock(object):
         self._name = name
         self._ents = ents or []
         self._layout = layout
+        if layout is not None:
+            layout._block = self
         self._isxref = isxref
 
     def get_Name(self):
@@ -212,6 +222,10 @@ class FakeDoc(object):
     def get_Blocks(self):
         return self._table
 
+    def get_Layouts(self):
+        # коллекция Layouts: FakeLayout привязан к блоку листа
+        return [b._layout for b in self._table if b._layout is not None]
+
     def CopyObjects(self, objs, target):
         for o in objs:
             target.add(FakeBlock(o.get_Name(), list(o)))
@@ -242,7 +256,7 @@ BLOCKS = [
     FakeBlock("*Model_Space", [ENT_MODEL, ENT_FULL, ENT_BROKEN]),
     FakeBlock("*Paper_Space", [ENT_L1], FakeLayout("Лист1")),
     FakeBlock("*Paper_Space0", [ENT_L2], FakeLayout("Лист2")),
-    # лист без объекта Layout -- имя должно остаться именем блока
+    # лист без объекта Layout -- в карту не попадает (S17)
     FakeBlock("*Paper_Space1", [FakeEnt("7B02")]),
     FakeBlock("Комплект КП50 v1.5", [ENT_NESTED]),
     FakeBlock("_Oblique", []),
@@ -319,6 +333,7 @@ def build_interp():
     interp.define("vlax-get-property", get_property)
     # форма vla-get-XXX -- отдельная функция, а не свойство
     for pname in ("Handle", "Name", "IsXRef", "IsDynamicBlock", "Layout",
+                  "Layouts", "Block",
                   "ObjectName", "EffectiveName", "Layer"):
         interp.define("vla-get-" + pname,
                       (lambda nm: (lambda o: attr(o, "get_" + nm)()))(pname))
@@ -453,6 +468,14 @@ def main():
           call(interp, '(KG-RecordNameOf "63")'), "*U63")
     check("S16 KG-RecordNameOf на неизвестном handle",
           call(interp, '(KG-RecordNameOf "FF")'), None)
+    check("S17 лист без объекта Layout -- пространства нет",
+          call(interp, '(KG-SpaceOfHandle "7B02")'), None)
+    check("S18 KG-LayoutNameFor по имени блока листа",
+          call(interp, '(KG-LayoutNameFor "*Paper_Space")'), "Лист1")
+    check("S19 KG-LayoutNameFor чужого имени -- nil",
+          call(interp, '(KG-LayoutNameFor "Комплект КП50 v1.5")'), None)
+    check("S20 KG-LayoutNameFor блока без Layout -- nil",
+          call(interp, '(KG-LayoutNameFor "*Paper_Space1")'), None)
 
     # --- чтение модели экземпляра: то, что падало на каждом вхождении ---
     print("Модель «трудного» вхождения (не читается ничего, кроме handle):")
