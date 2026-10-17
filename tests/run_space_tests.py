@@ -528,7 +528,7 @@ def main():
 
     # --- M19-M22: обработчик ошибок возвращает имя мастер-версии ----------
     # На реальном чертеже INTEGRATE упал после того, как имя мастера было
-    # освобождено, и в списке блоков осталось "Комплект КП50 v1.5~до1.5".
+    # освобождено, и в списке блоков осталось "~Комплект КП50 v1.5~1.5".
     interp.define("KG_EXDefHandle", lambda n: "REC" + str(n))
     call(interp, "(setq KG-SAVED-VARS nil)")
     call(interp, "(setq *XDEFS* (list \"Мастер v2\" \"Стойка\"))")
@@ -544,22 +544,22 @@ def main():
 """)
 
     # имя свободно -> возвращаем
-    call(interp, '(setq KG-MASTER-FREED (cons "Мастер v2" "Мастер v2~до2"))')
-    call(interp, '(setq *XDEFS* (list "Мастер v2~до2" "Стойка"))')
+    call(interp, '(setq KG-MASTER-FREED (cons "Мастер v2" "~Мастер v2~2"))')
+    call(interp, '(setq *XDEFS* (list "~Мастер v2~2" "Стойка"))')
     call(interp, '(KG-ErrorRestore "no function definition: SORT")')
     check("M19 после падения имя мастер-версии возвращено",
           lisp_to_string(call(interp, "(KG_EXDefExists \"Мастер v2\")")), "T")
     check("M20 временного имени больше нет",
-          lisp_to_string(call(interp, "(KG_EXDefExists \"Мастер v2~до2\")")), "nil")
+          lisp_to_string(call(interp, "(KG_EXDefExists \"~Мастер v2~2\")")), "nil")
     check("M21 флаг освобождения сброшен",
           lisp_to_string(call(interp, "KG-MASTER-FREED")), "nil")
 
     # имя занято пришедшим из буфера определением -> не трогаем
-    call(interp, '(setq KG-MASTER-FREED (cons "Мастер v2" "Мастер v2~до2"))')
-    call(interp, '(setq *XDEFS* (list "Мастер v2" "Мастер v2~до2"))')
+    call(interp, '(setq KG-MASTER-FREED (cons "Мастер v2" "~Мастер v2~2"))')
+    call(interp, '(setq *XDEFS* (list "Мастер v2" "~Мастер v2~2"))')
     call(interp, '(KG-ErrorRestore "no function definition: SORT")')
     check("M22 занятое имя не перезаписывается, временное остаётся",
-          lisp_to_string(call(interp, "(KG_EXDefExists \"Мастер v2~до2\")")), "T")
+          lisp_to_string(call(interp, "(KG_EXDefExists \"~Мастер v2~2\")")), "T")
 
     # --- M23-M24: логические флаги из COM ----------------------------------
     # AutoCAD возвращает :vlax-true / :vlax-false, и ОБА символа в условии

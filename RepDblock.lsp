@@ -78,6 +78,18 @@
 ;; PURGE, как было в сборке 36.
 (if (not (boundp 'KG-CLEANUP-ERASE-U)) (setq KG-CLEANUP-ERASE-U t))
 
+;; Причина последнего отказа KG_EXEraseAnonDef: "minsert" (внутри
+;; многострочная вставка), "noent" (не найден ename записи), "entdel"
+;; (ENTD не отдал определение), "left" (определение читается и после
+;; ENTD), "ok" (стёрто). По ней отчёт очистки разбирает отказы: по
+;; одному «не удалось: 43» не видно, что именно мешает.
+(if (not (boundp 'KG-ERASE-WHY)) (setq KG-ERASE-WHY ""))
+
+;; Текст отказа ENTD у последней попытки стирания (пусто -- отказ без
+;; ошибки). По «ENTD отказал: 38» не видно, ЧЕМ платформа объясняет отказ:
+;; счётчик один и тот же у «ENTD вернул nil» и у «ENTD выбросил ошибку».
+(if (not (boundp 'KG-ERASE-ERR)) (setq KG-ERASE-ERR ""))
+
 ;; Куда смотрело чтение состояний вложенных блоков у последнего экземпляра:
 ;; "*U" -- анонимное представление, "ОПРЕДЕЛЕНИЕ" -- родительское
 ;; определение (представления у вставки нет), "НЕТ" -- вложенных вставок не
@@ -93,7 +105,7 @@
 ;; Какое имя мастер-версии сейчас переименовано и в какое (пара
 ;; старое . временное) либо nil. Нужна обработчику ошибок: если команда
 ;; упадёт между освобождением имени и завершением, определение надо
-;; вернуть обратно, иначе в списке блоков останется "ИМЯ~доN".
+;; вернуть обратно, иначе в списке блоков останется "~ИМЯ".
 
 ;; Номер сборки. Печатается при загрузке и в начале INTEGRATE: по нему
 ;; видно, тот ли файл загружен в AutoCAD.
@@ -157,7 +169,18 @@
 ;; План интеграции (семейство, варианты, вложенные).
 (if (not (boundp 'KG-PLAN)) (setq KG-PLAN nil))
 
-(setq KG-VERSION "71")
+;; 71.3: имена, которые обязана сохранить очистка, даже если на них никто
+;; не ссылается: мастер-версии и определения вариантов текущего прогона.
+;; Без этого PURGE "Блоки *" снимал мастер-версию с нулём вставок, и в
+;; файле не оставалось ни мастера, ни варианта («мастер остаётся в файле»).
+(if (not (boundp 'KG-KEEPNAMES)) (setq KG-KEEPNAMES nil))
+
+;; 71.3: якорные вложения ((имя . ename) ...), которые держат имена
+;; KG-KEEPNAMES "использованными" на время очистки. Живут внутри одного
+;; прогона очистки; снимаются в KG-PurgeAnchorsDrop, в том числе по ошибке.
+(if (not (boundp 'KG-PURGE-ANCHORS)) (setq KG-PURGE-ANCHORS nil))
+
+(setq KG-VERSION "71.3")
 
 (vl-load-com)
 
@@ -370,7 +393,12 @@
 (if (not (boundp 'KG-FAIL-STEP)) (setq KG-FAIL-STEP nil))
 (if (not (boundp 'KG-FAIL-MSG)) (setq KG-FAIL-MSG nil))
 
-(defun KG-Safe (fn def / r msg)
+(defun KG-Safe (kg-fn kg-def / kg-res kg-msg)
+  ;; У внутренних переменных приставка kg- НЕ для красоты: сюда приходят
+  ;; лямбды, а у них подстановка динамическая -- свободная переменная
+  ;; берётся из БЛИЖАЙШЕЙ рамки. Будь тут имена r, fn, def, msg, лямбда с
+  ;; такой свободной переменной молча нашла бы их вместо своей. Так и
+  ;; пропадал весь возврат ссылок -- разбор у KG-RewirePairOf.
   ;; Прошлый отказ сбрасывается ДО операции. Прогон сборки 58: строка
   ;; «[счёт] определений в списке: 57» напечаталась, а следом пошло
   ;; «ВНИМАНИЕ: не напечаталось число определений (шаг "счёт вхождений",
@@ -378,8 +406,8 @@
   ;; значение от другого, в одной строке.
   (setq KG-FAIL-STEP nil)
   (setq KG-FAIL-MSG nil)
-  (setq r (vl-catch-all-apply fn))
-  (if (KG-IsErr r)
+  (setq kg-res (vl-catch-all-apply kg-fn))
+  (if (KG-IsErr kg-res)
     (progn
       ;; Шаг, на котором произошёл отказ, запоминается ОТДЕЛЬНО.
       ;;
@@ -389,14 +417,14 @@
       ;; удачном шаге, поэтому к моменту печати там стоял шаг, прошедший
       ;; ДО отказа. Сообщение называло не то место и уводило в сторону.
       (setq KG-FAIL-STEP (KG-AsString KG-LAST-STEP))
-      (setq msg (KG-AsString
-                  (vl-catch-all-apply
-                    '(lambda () (vl-catch-all-error-message r)))))
-      (if (or (null msg) (= msg "")) (setq msg "(причина не прочитана)"))
-      (setq KG-FAIL-MSG msg)
-      def
+      (setq kg-msg (KG-AsString
+                     (vl-catch-all-apply
+                       '(lambda () (vl-catch-all-error-message kg-res)))))
+      (if (or (null kg-msg) (= kg-msg "")) (setq kg-msg "(причина не прочитана)"))
+      (setq KG-FAIL-MSG kg-msg)
+      kg-def
     )
-    r
+    kg-res
   )
 )
 
@@ -404,9 +432,9 @@
 ;;; потому, что KG-Safe принимает только лямбду: vl-catch-all-apply
 ;;; трактует первый аргумент как функцию, и список-вызов вместо вызова
 ;;; даёт ошибку и запасное значение.
-(defun KG-Call (fn args def / r)
-  (setq r (vl-catch-all-apply fn args))
-  (if (KG-IsErr r) def r)
+(defun KG-Call (kg-fn kg-args kg-def / kg-res)
+  (setq kg-res (vl-catch-all-apply kg-fn kg-args))
+  (if (KG-IsErr kg-res) kg-def kg-res)
 )
 
 ;;; Результат vl-catch-all-apply -- ошибка?
@@ -645,17 +673,49 @@
   )
 )
 
-;; Снять суффикс «~до». Старые определения переименовываются ДО чтения
+;; Снять служебную отметку старого определения. Текущая сборка
+;; переименовывает определение в «~ИМЯ» (при необходимости «~ИМЯ~итерация»,
+;; а при занятом имени -- «~ИМЯ$N$»); прежние сборки -- в «ИМЯ~доитерация».
+;; Обе формы поддерживаются: в чертежах, прошедших прежние сборки, старые
+;; определения ещё остаются.
+;;
+;; Отметка снимается обязательно: определения переименовываются ДО чтения
 ;; старых экземпляров, поэтому вложенные вставки в них указывают уже на
-;; «Стойка КП50~до», а в новом определении вложенный блок называется
-;; «Стойка КП50». Без снятия суффикса ни одно состояние вложенного блока
-;; не переносилось: «В новой версии такого вложенного блока нет».
+;; «~Стойка КП50» («Стойка КП50~до» у прежних сборок), а в новом
+;; определении вложенный блок называется «Стойка КП50». Без снятия отметки
+;; ни одно состояние вложенного блока не переносилось: «В новой версии
+;; такого вложенного блока нет».
 (defun KG-StripDoSuffix (nm / s pos)
   (setq s (KG-AsString nm))
-  (setq pos (KG-StrPos "~до" s))
-  (if pos
-    (substr s 1 (1- pos))
-    s
+  (if (= (substr s 1 1) "~")
+    (progn
+      (setq s (substr s 2))
+      (setq pos (KG-StrPos "~" s))
+      (if pos (setq s (substr s 1 (1- pos))))
+      (setq pos (KG-StrPos "$" s))
+      (if pos (setq s (substr s 1 (1- pos))))
+      s
+    )
+    (progn
+      (setq pos (KG-StrPos "~до" s))
+      (if pos
+        (substr s 1 (1- pos))
+        s
+      )
+    )
+  )
+)
+
+;; Служебное (временное) имя старого определения: «~ИМЯ…» -- как
+;; переименовывает текущая сборка, или «ИМЯ~до…» -- как переименовывали
+;; прежние. Такое имя не настоящее: в разбор семейства не принимается,
+;; а в очистке означает мусор прошлой интеграции.
+(defun KG-IsTempDefName (nm / s)
+  (setq s (KG-AsString nm))
+  (if (or (= (substr s 1 1) "~")
+          (/= nil (KG-StrPos "~до" s)))
+    t
+    nil
   )
 )
 
@@ -806,19 +866,22 @@
 (defun KG-ParseBlockName (name / p)
   (if (/= (type name) (type ""))
     nil                                        ; не строка -- разбирать нечего
-    (progn
-      (setq p (KG-ParseVName name))            ; производственная схема
-      (if (not p) (setq p (KG-ParseParenName name))) ; скобочная схема
-      (if (not p)
-        (if (and (/= (KG-TrimBoth name) "")
-                 (not (KG-IsAnonymousName name))
-                 (not (KG-IsSystemBlockName name))
-                 (not (KG-IsServiceName name))
-                 (not (KG-StrContains name "~до")))
-          (setq p (list (KG-TrimBoth name) "" "")) ; простое имя без версии
+    (if (KG-IsTempDefName name)
+      nil                                      ; служебное имя старого определения
+      (progn
+        (setq p (KG-ParseVName name))            ; производственная схема
+        (if (not p) (setq p (KG-ParseParenName name))) ; скобочная схема
+        (if (not p)
+          (if (and (/= (KG-TrimBoth name) "")
+                   (not (KG-IsAnonymousName name))
+                   (not (KG-IsSystemBlockName name))
+                   (not (KG-IsServiceName name))
+                   (not (KG-IsTempDefName name)))
+            (setq p (list (KG-TrimBoth name) "" "")) ; простое имя без версии
+          )
         )
+        p
       )
-      p
     )
   )
 )
@@ -976,6 +1039,157 @@
   )
 )
 
+;;;--- Гибкий разбор семейства (сборка 71.3) ---------------------------------
+;;;
+;;; Заказчик принимает имя семейства в любом виде: и «Комплект КП50К стойка
+;;; v1.52 КП45370», и прежний «Комплект КП50К стойка КП45370 v1.3». Отличие
+;;; от KG-ParseBlockName: семейство известно заранее -- его называет
+;;; пришедший мастер-блок. Метка версии поэтому ищется в любом месте
+;;; хвоста имени, а остаток хвоста становится вариантом.
+
+;; Имя начинается с «Комплект»: у таких семейств имена без метки версии
+;; тоже считаются членами семьи («Комплект КП50»).
+(defun KG-IsKomplektBase (b)
+  (KG-StrEq (substr (KG-AsString b) 1 8) "Комплект")
+)
+
+;; s начинается с префикса b (без учёта регистра)? Возвращает остаток
+;; строки (может быть пустым) или nil.
+(defun KG-RestAfterPrefix (s b / ls lb)
+  (setq ls (KG-AsString s))
+  (setq lb (KG-AsString b))
+  (if (<= (strlen lb) (strlen ls))
+    (if (KG-StrEq (substr ls 1 (strlen lb)) lb)
+      (substr ls (1+ (strlen lb)))
+      nil
+    )
+    nil
+  )
+)
+
+;; Последняя метка версии в строке: (позиция-v . "1.52") или nil. Метка --
+;; " v" на границе слова, цифры и точки за ней, пробел или конец после;
+;; точка на конце версии не считается. Ищется ПОСЛЕДНЯЯ ПОДХОДЯЩАЯ метка:
+;; «A vZZ КП45370 v1.3» даёт 1.3, а не мусор посередине.
+(defun KG-LastVerToken (s / i n n2 j k num lim found)
+  (setq s (KG-AsString s))
+  (setq n (strlen s))
+  (setq lim n)
+  (setq found nil)
+  (while (and (null found) (> lim 1))
+    (setq i (KG-LastPos (substr s 1 lim) " v"))
+    (if (= i 0)
+      (setq lim 1)
+      (progn
+        (setq n2 lim)
+        (setq j (+ i 2))
+        (if (or (> j n2) (not (KG-IsDigitChar (substr s j 1))))
+          (setq lim (1- i))
+          (progn
+            (setq k j)
+            (while (and (<= k n2)
+                        (or (KG-IsDigitChar (substr s k 1))
+                            (= (substr s k 1) ".")))
+              (setq k (1+ k))
+            )
+            (setq num (substr s j (- k j)))
+            (if (or (= num "")
+                    (= (substr num (strlen num) 1) ".")
+                    (and (< k n2) (/= (substr s k 1) " ")))
+              (setq lim (1- i))
+              (setq found (cons (1+ i) num))
+            )
+          )
+        )
+      )
+    )
+  )
+  found
+)
+
+;; Разбор хвоста скобочной схемы «(16)КП7»: (iter . var) или nil.
+;; KG-ParseParenName принимает только имя с базой, поэтому к хвосту
+;; приставлена буква-заглушка.
+(defun KG-TailParenScheme (tail / pt)
+  (setq pt (KG-ParseParenName (strcat "x" tail)))
+  (if (and pt (= (nth 0 pt) "x"))
+    (cons (nth 1 pt) (nth 2 pt))
+    nil
+  )
+)
+
+;; Имя члена семьи base: (base итерация вариант) или nil, если имя к семье
+;; не относится. После базы обязательна граница слова, поэтому «Комплект
+;; КП50» не ловит «Комплект КП50К стойка». Метка версии -- в любом месте
+;; хвоста; остаток хвоста -- вариант. Имя без версии -- тоже член семьи
+;; (вариант целиком, итерация пустая).
+(defun KG-FamilyParse (name base / s b tail t2 vt p ver pre post ts)
+  (setq s (KG-AsString name))
+  (setq b (KG-AsString base))
+  (if (or (= b "") (= s "") (KG-IsTempDefName s))
+    nil
+    (progn
+      (setq tail (KG-RestAfterPrefix s b))
+      (if (not tail)
+        nil
+        (if (and (/= tail "") (/= (substr tail 1 1) " ")
+                 ;; 71.3: схема KG-MakeName «БАЗА(16)ВАРИАНТ» пишется без
+                 ;; пробела, поэтому «(» -- тоже граница слова, но лишь
+                 ;; когда хвост и правда разбирается как (ЦИФРЫ)ВАРИАНТ
+                 (not (and (= (substr tail 1 1) "(")
+                           (KG-TailParenScheme tail))))
+          nil                                  ; после базы не граница слова
+          (progn
+            (setq tail (KG-TrimBoth tail))
+            (if (= tail "")
+              (list b "" "")                   ; имя совпало с базой
+              (progn
+                (setq t2 (strcat " " tail))
+                (setq vt (KG-LastVerToken t2))
+                (if vt
+                  (progn
+                    (setq p (car vt))
+                    (setq ver (cdr vt))
+                    (setq pre (KG-TrimRight (substr t2 1 (- p 2))))
+                    (setq post (KG-TrimLeft (substr t2 (+ p (strlen ver) 1))))
+                    (list b
+                          ver
+                          (KG-TrimBoth (strcat pre
+                                       (if (and (/= pre "") (/= post "")) " " "")
+                                       post)))
+                  )
+                  (progn
+                    (setq ts (KG-TailParenScheme tail))
+                    (if ts
+                      (list b (car ts) (cdr ts))   ; схема БАЗА(ИТЕРАЦИЯ)ВАРИАНТ
+                      (list b "" tail)             ; вариант без версии
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Активен ли гибкий разбор для семьи: пришёл версионный мастер и семья
+;; «Комплект…». Без версии -- прежнее точное поведение (подмена
+;; безверсионных мастер-блоков обязана работать как раньше).
+(defun KG-FlexFamilyP (base newiter)
+  (and (/= (KG-IterToStr newiter) "") (KG-IsKomplektBase base))
+)
+
+;; Разбор имени со снятой служебной отметкой «~ИМЯ»: разбор один и тот же
+;; для определений и эффективных имён.
+(defun KG-FamilyParseAny (name base / p)
+  (setq p (KG-FamilyParse name base))
+  (if (not p) (setq p (KG-FamilyParse (KG-StripDoSuffix name) base)))
+  p
+)
+
 ;;;===========================================================================
 ;;; РАЗДЕЛ 3. МОДЕЛЬ ЧЕРТЕЖА И СКАНИРОВАНИЕ
 ;;;
@@ -1065,38 +1279,75 @@
   (reverse out)
 )
 
+;; То же с гибким разбором (сборка 71.3): имя экземпляра разбирается от
+;; известного семейства base.
+(defun KG-FindFamilyInstancesFlex (model base / out p eff)
+  (setq out nil)
+  (foreach ins (KG-ModelInsts model)
+    (setq eff (KG-CdrCI "eff" ins))
+    (setq p (KG-FamilyParseAny eff base))
+    (if p (setq out (cons (cons ins p) out)))
+  )
+  (reverse out)
+)
+
 ;; Старые экземпляры: любое вхождение семейства с итерацией, отличной от
 ;;; новой (п. 5 ТЗ). Сравнение «меньше» здесь неприменимо: в чертеже может
 ;;; оказаться и более поздняя итерация, и её трогать нельзя.
 ;;; Для блоков без версии (newiter = ""):
-;;; - если модель содержит переименованные определения (~до), старыми
+;;; - если модель содержит переименованные определения («~ИМЯ», «~до»), старыми
 ;;;   считаются только они (а новое определение и его технический экземпляр -- новые);
 ;;; - если переименований ещё не было (исходная модель чертежа), все экземпляры
 ;;;   базового блока подлежат замене.
 (defun KG-FindOldIterations (model base newiter / out any-do)
   (setq out nil)
-  (if (/= (KG-IterToStr newiter) "")
-    (foreach pr (KG-FindFamilyInstances model base)
+  (if (KG-FlexFamilyP base newiter)
+    ;; 71.3: гибкий разбор -- имя семейства в любом виде, остаток хвоста
+    ;; вариант («Комплект КП50К стойка КП45370 v1.3» -- член семьи
+    ;; «Комплект КП50К стойка» с вариантом «КП45370»).
+    (foreach pr (KG-FindFamilyInstancesFlex model base)
       (if (KG-IterOther (nth 1 (cdr pr)) newiter)
-        (setq out (cons pr out)))
+        (setq out (cons pr out))
+      )
     )
-    (progn
-      (setq any-do
-        (vl-some '(lambda (pr)
-                    (or (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
-                        (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до")))
-                 (KG-FindFamilyInstances model base)))
+    (if (/= (KG-IterToStr newiter) "")
       (foreach pr (KG-FindFamilyInstances model base)
-        (if (if any-do
-              (or (/= (nth 1 (cdr pr)) "")
-                  (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
-                  (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до"))
-              t)
+        (if (KG-IterOther (nth 1 (cdr pr)) newiter)
           (setq out (cons pr out)))
+      )
+      (progn
+        (setq any-do
+          (vl-some '(lambda (pr)
+                      (or (KG-IsTempDefName (KG-CdrCI "def" (car pr)))
+                          (KG-IsTempDefName (KG-CdrCI "eff" (car pr)))))
+                   (KG-FindFamilyInstances model base)))
+        (foreach pr (KG-FindFamilyInstances model base)
+          (if (if any-do
+                (or (/= (nth 1 (cdr pr)) "")
+                    (KG-IsTempDefName (KG-CdrCI "def" (car pr)))
+                    (KG-IsTempDefName (KG-CdrCI "eff" (car pr))))
+                t)
+            (setq out (cons pr out)))
+        )
       )
     )
   )
   out
+)
+
+;; Определения семьи со старой версией -- в том числе те, у которых НЕТ ни
+;; одной вставки: ((имя . (base вариант итерация)) ...). По ним видно, какие
+;; варианты надо привести к новой версии, даже если на них никто не стоит
+;; (правило «определения без вставок тоже обновлять»).
+(defun KG-FindOldFamilyDefs (model base newiter / out nm p)
+  (setq out nil)
+  (foreach nm (KG-UserDefNames model)
+    (setq p (KG-FamilyParse nm base))
+    (if (and p (KG-IterOther (nth 1 p) newiter))
+      (setq out (cons (cons nm p) out))
+    )
+  )
+  (reverse out)
 )
 
 ;; Группировка по варианту: (("Стойка" . (pr ...)) ("" . (pr ...)) ...)
@@ -1234,9 +1485,9 @@
 ;;   имя было, но не пришло       -- мастер ОСТАЛСЯ СТАРЫМ.
 ;; Записать причину отказа в KG-DBX-ERR. Без этого «ObjectDBX недоступен»
 ;; не отличить от «интерфейс получен, но CopyObjects отказал».
-;; Определения, которые можно удалить: ссылок нет, имя либо несёт наш
-;; маркер «~до», либо разбирается схемой семейства и не является новейшей
-;; итерацией.
+;; Определения, которые можно удалить: ссылок нет, имя либо служебное
+;; («~ИМЯ», у прежних сборок «~до»), либо разбирается схемой семейства и
+;; не является новейшей итерацией.
 ;; Число ссылок по карте держателей: длина списка = количество вставок.
 (defun KG-CleanupCounts (holders / out p)
   ;; Первый элемент может быть маркером успешной выборки ("OK"): карта
@@ -1265,7 +1516,7 @@
     (setq p (KG-ParseBlockName nm))
     (if (and (< c 1)
              (not (KG-IsAnonymousName nm))
-             (or (KG-StrContains nm "~до")
+             (or (KG-IsTempDefName nm)
                  (and p (/= (nth 1 p) "") (not (KG-StrInterCI (list nm) keep)))))
       (setq cand (cons nm cand))
     )
@@ -1310,6 +1561,74 @@
     )
   )
   (mapcar 'cdr keep)
+)
+
+;; 71.3. Что очистка обязана сохранить сверх «последней версии каждого
+;; варианта»: имена семьи без версии (у «Комплект…» они -- определения той
+;; же семьи) и всё, что отмечено прогоном интеграции (KG-KEEPNAMES:
+;; мастер-версии и определения вариантов).
+(defun KG-CleanupKeepExtra (names / keep nm p nmver)
+  (setq keep nil)
+  (foreach nm names
+    (setq p (KG-ParseBlockName nm))
+    ;; имя без версии и без варианта с приставкой «Комплект» -- и в файле
+    ;; есть другое имя этой же семьи (с версией или с вариантом)
+    (if (and p (= (nth 1 p) "") (= (nth 2 p) "")
+             (KG-IsKomplektBase nm)
+             (vl-some '(lambda (x)
+                         (if (KG-RestAfterPrefix x nm)
+                           (progn
+                             (setq nmver (KG-ParseBlockName x))
+                             (and nmver (or (/= (nth 1 nmver) "")
+                                            (/= (nth 2 nmver) ""))))
+                           nil))
+                      names))
+      (setq keep (cons nm keep))
+    )
+  )
+  (foreach nm KG-KEEPNAMES
+    (if (not (KG-StrInterCI (list nm) keep))
+      (setq keep (cons nm keep))
+    )
+  )
+  (reverse keep)
+)
+
+;; Полный список имён, защищённых от очистки (кандидаты + PURGE).
+(defun KG-CleanupKeepAll (names)
+  (append (KG-CleanupKeepNewest names) (KG-CleanupKeepExtra names))
+)
+
+;; Пары «настоящее имя -> служебное» для возврата ссылок при очистке.
+;; Ссылки на служебные определения живут внутри чужих определений и
+;; анонимных представлений; пока их не вернуть на настоящие имена, ни
+;; PURGE, ни стирание определения не берут -- оно «использовано», и
+;; очистка не доходит до конца. Настоящее имя восстанавливается снятием
+;; отметки (KG-StripDoSuffix): «~ИМЯ», «~ИМЯ~итерация», «~ИМЯ$N$»,
+;; «ИМЯ~до…». Пара берётся только тогда, когда настоящее определение в
+;; чертеже есть: если буфер имя не принёс, возвращать ссылку некуда, и
+;; трогать её нельзя.
+(defun KG-CleanupRestorePairs (names / out nm base)
+  (setq out nil)
+  (foreach nm names
+    (if (KG-IsTempDefName nm)
+      (progn
+        (setq base (KG-StripDoSuffix nm))
+        (if (and base (/= base "")
+                 (not (KG-StrEq base (KG-AsString nm)))
+                 (KG-StrInterCI (list base) names))
+          (setq out (cons (list base nm) out))
+        )
+      )
+    )
+  )
+  (reverse out)
+)
+
+;; Число отказов названной причины в списке причин KG_EXEraseAnonDef.
+(defun KG-WhyCount (why al / v)
+  (setq v (KG-CdrCI (KG-AsString why) al))
+  (KG-AsNum v 0)
 )
 
 ;;;--- Сиротские анонимные представления ------------------------------------
@@ -1365,11 +1684,11 @@
 ;; только там, где его вставляют в модель, но и внутри чужих определений.
 ;;
 ;; Как это устроено. До вставки из буфера имя освобождается: определение
-;; переименовывается в «имя~до<итерация>», и AutoCAD уводит за ним все свои
+;; переименовывается в «~имя», и AutoCAD уводит за ним все свои
 ;; ссылки. Из буфера приходит определение под прежним именем -- с новым
 ;; содержимым. Дальше ссылки надо вернуть на прежнее имя: тогда и чужие
 ;; определения, и анонимные представления начинают указывать на свежую версию,
-;; а «имя~до» остаётся без ссылок и его снимает PURGE.
+;; а служебное имя «~имя» остаётся без ссылок и его снимает PURGE.
 ;;
 ;; Без этого шага на реальном чертеже после прогона осталось 31 определение
 ;; «имя~до» с нулём вставок, и PURGE их не взял: значит, ссылки на них ещё были.
@@ -1383,15 +1702,15 @@
   (if out t nil)
 )
 
-;; Кто держит определения с суффиксом «~до». Нужна отчёту: «осталось N
-;; определений с ~до» без имён держателей не отличить от «ссылок нет, PURGE
-;; их просто не берёт». Держатели берутся из готовой карты ссылок, поэтому
-;; отдельного обхода таблицы блоков здесь нет.
+;; Кто держит служебные определения прошлой интеграции («~ИМЯ», у прежних
+;; сборок «ИМЯ~до»). Нужна отчёту: «осталось N» без имён держателей не
+;; отличить от «ссылок нет, PURGE их просто не берёт». Держатели берутся из
+;; готовой карты ссылок, поэтому отдельного обхода таблицы блоков здесь нет.
 (defun KG-DoHolderLines (holders names / out nm hh h x lines shown)
   (setq out nil)
   (setq lines 0)
   (foreach nm names
-    (if (and (< lines 8) (KG-StrContains (KG-AsString nm) "~до"))
+    (if (and (< lines 8) (KG-IsTempDefName nm))
       (progn
         (setq hh (KG-CdrCI (KG-AsString nm) (KG-Unmark holders)))
         (if hh
@@ -1420,7 +1739,7 @@
 )
 
 ;; Какие определения вставляют данное определение. Обход идёт по ВСЕМ именам
-;; таблицы, включая анонимные представления: именно там ссылки на «~до»
+;; таблицы, включая анонимные представления: именно там ссылки на «~ИМЯ»
 ;; и остаются. Результат кэшируется в KG-REWHOLD по имени-ключу.
 (defun KG-DefRefHolders (tgt / pr out nm names)
   (setq pr (assoc (KG-AsString tgt) KG-REWHOLD))
@@ -1433,7 +1752,7 @@
         ;; Исключается только само старое определение: вставка блока самого в
         ;; себя была бы петлёй. Новое определение держателем быть МОЖЕТ --
         ;; именно там лежит ссылка, которая возвращается на следующем проходе:
-        ;; «Гайка» из буфера вставляет «Шайба~до», а «Шайба» становится
+        ;; «Гайка» из буфера вставляет «~Шайба», а «Шайба» становится
         ;; прежней только вместе с «Гайкой».
         (if (and nm (/= (KG-AsString nm) "")
                  (not (KG-StrEq nm (KG-AsString tgt))))
@@ -1456,9 +1775,9 @@
 ;; прежние имена, поэтому проверка замыкания обязана смотреть на граф ПОСЛЕ
 ;; перепривязки, а не на текущий.
 ;;
-;; Суффикс «~до» здесь НАМЕРЕННО не снимается по написанию: имя может
-;; само по себе заканчиваться на «до», и обрезание дало бы другое
-;; определение.
+;; Служебная отметка здесь НАМЕРЕННО не снимается по написанию: имена
+;; перепривязываются по списку пар (KG-REWPAIRS), а обрезание по «~» или
+;; «до» исказило бы имя чужого определения.
 (defun KG-RewResolve (nm / k pr)
   (setq k (KG-AsString nm))
   (foreach pr KG-REWPAIRS
@@ -1602,15 +1921,24 @@
 ;; Перепривязать одну пару из списка. Отдельная функция, а не лямбда внутри
 ;; KG-Safe в теле цикла: лямбда, цитирующая локальную переменную цикла,
 ;; подставляется ненадёжно -- на стенде такой вызов молча отдавал запасное
-;; значение, и шаг не перепривязывал ничего, не сообщая об отказе. Здесь
-;; переменная r -- аргумент функции, и перехват стоит вокруг вызова, которому
-;; она передана обычным образом.
-(defun KG-RewirePairOf (r)
-  ;; Порядок аргументов: сперва служебное имя «~до», затем прежнее. Пара в
+;; значение, и шаг не перепривязывал ничего, не сообщая об отказе.
+;;
+;; Настоящая причина -- найдена пробой на живом AutoCAD (сборка 71.1).
+;; У лямбды подстановка ДИНАМИЧЕСКАЯ: свободная переменная берётся из
+;; ближайшей рамки. Между лямбдой и телом этой функции стоит рамка KG-Safe,
+;; а в ней есть СВОЯ переменная r -- результат перехвата, в момент вызова
+;; ещё пустая. Лямбда брала именно её: имена приходили пустыми,
+;; KG-RewireOnePair сразу отвечала «0», и шаг молча не перепривязывал
+;; ничего. Числа пробы: KG-RewireOnePair напрямую -- 1, он же под обёрткой с
+;; готовыми строками -- 1, а через эту обёртку -- 0. Теперь аргумент
+;; называется pr, а у KG-Safe имена убраны за приставку kg-, чтобы
+;; свободные имена лямбд ничего не задевали.
+(defun KG-RewirePairOf (pr)
+  ;; Порядок аргументов: сперва служебное имя «~ИМЯ», затем прежнее. Пара в
   ;; renames лежит наоборот -- (прежнее служебное), и перестановка здесь
   ;; обязательна: первая версия передавала их как есть, держатели искались
   ;; по прежнему имени, не находились, и шаг молча не перепривязывал ничего.
-  (KG-Safe '(lambda () (KG-RewireOnePair (nth 1 r) (nth 0 r))) 0)
+  (KG-Safe '(lambda () (KG-RewireOnePair (nth 1 pr) (nth 0 pr))) 0)
 )
 
 ;; Шаг 8б. Вернуть ссылки на прежние имена по всем парам переименования.
@@ -1669,7 +1997,7 @@
 ;;;--- Видимость вложенных блоков внутри определений -------------------------
 ;;
 ;; Определение без итерации в имени («Стойка КП50», «Закладная в полость
-;; стойки») подменяется целиком: старое переименовывается в «имя~до», из
+;; стойки») подменяется целиком: старое переименовывается в «~имя», из
 ;; буфера приходит новое под прежним именем. Содержимое при этом обновляется
 ;; верно, а вот состояния видимости вложенных блоков сбрасываются в значения
 ;; по умолчанию новой версии -- прогон это подтвердил: блоки с итерацией
@@ -1863,8 +2191,10 @@
 )
 
 ;; Одно определение из списка переименований. Отдельная функция по той же
-;; причине, что KG-RewirePairOf: лямбда, цитирующая локальную переменную
-;; цикла, подставляется ненадёжно, и вызов молча отдаёт запасное значение.
+;; причине, что KG-RewirePairOf: у лямбды под KG-Safe подстановка
+;; динамическая, и свободная переменная с ходовым именем (r, fn, def, msg)
+;; тихо берётся из рамки KG-Safe. Значение сюда передаётся обычным
+;; аргументом -- это надёжно.
 ;;
 ;; Шестой элемент результата -- имя определения, когда в него хоть что-то
 ;; возвращено: отчёт должен называть определения, а не только количество.
@@ -2064,15 +2394,33 @@
 ;; Возвращает T, если определение исчезло.
 (defun KG_EXEraseAnonDef (defname / e r ok n)
   (setq ok nil n 0)
+  (setq KG-ERASE-WHY "")
+  (setq KG-ERASE-ERR "")
   (if (KG-Safe '(lambda () (KG_HasMInsert defname)) nil)
     ;; без этой строки отказ выглядел как «не удалось: 43» без причины
-    (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
-                            "\": внутри есть многострочная вставка"))
+    (progn
+      (setq KG-ERASE-WHY "minsert")
+      (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
+                              "\": внутри есть многострочная вставка"))
+    )
     (progn
       (setq e (KG-Safe '(lambda () (KG-DefEnt defname)) nil))
+      ;; ENTD целится ТОЛЬКО в запись определения: живой прогон сборки 71
+      ;; показал, что прежний код получал из tblsearch первый объект ВНУТРИ
+      ;; определения и стирал не блок, а его первый примитив.
+      (if (not (KG-DefRecEnt e)) (setq e nil))
       (if e
         (progn
-          (setq r (KG-Call 'entdel (list e) nil))
+          ;; vl-catch-all-apply напрямую, а не KG-Call: если ENTD отказал
+          ;; С ОШИБКОЙ, её текст -- единственное, что объясняет отказ, а
+          ;; KG-Call ошибку возвращает запасным значением и текст теряет.
+          (setq r (vl-catch-all-apply 'entdel (list e)))
+          (if (KG-IsErr r)
+            (progn
+              (setq KG-ERASE-ERR (KG-AsString (vl-catch-all-error-message r)))
+              (setq r nil)
+            )
+          )
           (if r
             (progn
               ;; определение должно исчезнуть; если ename ещё читается,
@@ -2082,26 +2430,116 @@
                 (setq n (1+ n))
               )
               (setq ok (not (KG-Safe '(lambda () (KG-DefEnt defname)) nil)))
+              (if (not ok) (setq KG-ERASE-WHY "left"))
             )
-            ;; Текст прежней метки («BLOCK не найден») вводил в заблуждение:
-            ;; ename к этому моменту найден, не отдался именно ENTD. В
-            ;; прогоне сборки 54 строка «нет BLOCK для ...» не появилась ни
-            ;; разу -- значит, поиск определения работал, а читался отказ
-            ;; как «определения нет».
-            (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
-                                    "\": ENTD не отдал определение"))
+            (progn
+              (setq KG-ERASE-WHY "entdel")
+              ;; Текст прежней метки («BLOCK не найден») вводил в заблуждение:
+              ;; ename к этому моменту найден, не отдался именно ENTD. В
+              ;; прогоне сборки 54 строка «нет BLOCK для ...» не появилась ни
+              ;; разу -- значит, поиск определения работал, а читался отказ
+              ;; как «определения нет».
+              (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
+                                      "\": ENTD не отдал определение"))
+            )
           )
         )
-        (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
-                                "\": не найден ename определения"))
+        (progn
+          (setq KG-ERASE-WHY "noent")
+          (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
+                                  "\": не найден ename определения"))
+        )
       )
       (if (and r (not ok))
         (KG-TraceDetail (strcat "стирание \"" (KG-AsString defname)
                                 "\": определение читается и после ENTD"))
       )
+      (if ok (setq KG-ERASE-WHY "ok"))
       ok
     )
   )
+)
+
+;; --- Разбор держателей остатка ---------------------------------------------
+;; Почему определение не убирается: PURGE считает его использованным, а ENTD
+;; отказывает. Строка «держит: (прямых вставок нет)» верна, но не объясняет:
+;; вставок нет, а ссылка есть -- в словаре самого определения. Живой прогон
+;; сборки 71 оставил ровно так 20 определений «~ИМЯ» и 19 представлений
+;; «*U». Пробы ниже -- только чтение: без разбора словарей удаление вслепую
+;; уже роняло проверку (vla-Delete дал 0xC0000005).
+
+;; Как называется то, на что указывает handle: имя определения, тип записи
+;; или сам handle. Читается по одной записи, без обходов таблицы.
+(defun KG-RefObjLabel (h / ed z nm)
+  (setq ed (KG-Call 'entget (list h) nil))
+  (setq z (KG-AsString (cdr (assoc 0 ed))))
+  (setq nm (KG-AsString (cdr (assoc 2 ed))))
+  (cond
+    ((and nm (/= nm "")) nm)
+    ((/= z "") z)
+    (t (strcat "#" (KG-AsString h)))
+  )
+)
+
+;; Запись словаря одной строкой: «ключ»->значение. nil -- запись нечитаема.
+(defun KG-DictEntryText (e / key hd)
+  (setq key (KG-AsString (cdr (assoc 3 e))))
+  (setq hd (cdr (assoc 360 e)))
+  (if (null hd) (setq hd (cdr (assoc 350 e))))
+  (if (/= key "")
+    (strcat "«" key "»->" (if hd (KG-RefObjLabel hd) "?"))
+    nil
+  )
+)
+
+;; Что лежит в словаре записи определения. Сначала перебор словаря по 360
+;; через dictnext, затем известные ключи динамических блоков напрямую через
+;; dictsearch: ACAD_ENHANCEDBLOCK -- данные динамического блока (оттуда же
+;; читается имя параметра видимости), AcDbBlockRepBTag -- метка, которой
+;; представление (*U) держится за родительское определение. Пусто -- словаря
+;; не видно.
+(defun KG-DefDictProbe (defname / rec ed xd e txt n part hd key)
+  (setq txt "")
+  (setq rec (KG-Call 'KG-DefEnt (list defname) nil))
+  (if rec
+    (progn
+      (setq ed (KG-Call 'entget (list rec) nil))
+      (setq xd (cdr (assoc 360 ed)))
+      (if xd
+        (progn
+          ;; dictnext после перевода отдаёт первую запись; если реализация
+          ;; отвечает nil, добираем её обычным вызовом.
+          (setq e (KG-Call 'dictnext (list xd t) nil))
+          (if (null e) (setq e (KG-Call 'dictnext (list xd) nil)))
+          (setq n 0)
+          (while (and e (< n 4))
+            (setq part (KG-DictEntryText e))
+            (if part
+              (setq txt (strcat txt (if (= txt "") "" ", ") part))
+            )
+            (setq n (1+ n))
+            (setq e (KG-Call 'dictnext (list xd) nil))
+          )
+          (if e (setq txt (strcat txt ", …")))
+        )
+      )
+      (foreach key (list "ACAD_ENHANCEDBLOCK" "AcDbBlockRepBTag")
+        (setq part (KG-Call 'dictsearch (list ed key) nil))
+        (if part
+          (progn
+            (setq hd (cdr (assoc 360 part)))
+            (if (null hd) (setq hd (cdr (assoc 350 part))))
+            (if (not (KG-StrPos key txt))
+              (setq txt (strcat txt (if (= txt "") "" ", ")
+                                "«" key "»->"
+                                (if hd (KG-RefObjLabel hd) "?")))
+            )
+          )
+        )
+      )
+    )
+  )
+  txt
 )
 
 ;; Стирать ли сиротские *U. Отдельный предикат, а не условие внутри
@@ -2132,7 +2570,7 @@
 
 ;; Список динамических свойств экземпляра: (("Имя" . значение) ...)
 
-(defun KG-EXRefHolders ( / out ss i n e ed tgt defnm flt oh pr v)
+(defun KG-EXRefHolders ( / out ss i n e ed tgt defnm flt oh pr v hx)
   ;; Карта ссылок «определение -> кто его вставляет».
   ;;
   ;; ПРЕЖНИЙ СПОСОБ УБИВАЛ КОМАНДУ: обход таблицы блоков с
@@ -2149,7 +2587,7 @@
   ;; KG-CdrCI ищет по списку и на строке «OK» отвечал «нашёл», из-за чего
   ;; любое имя считалось присутствующим в карте, а сама карта при этом
   ;; терялась -- в сборке 38 на диск ушла именно такая версия.
-  (KG-Mark "карта ссылок: выборка всех вставок")
+  (KG-TraceDetail "карта ссылок: выборка всех вставок")
   (setq out nil)
   (setq ss (KG-Call 'ssget (list "_X" (list (cons 0 "INSERT"))) nil))
   (if (KG-IsErr ss)
@@ -2157,7 +2595,7 @@
                      (KG-AsString
                        (KG-Safe '(lambda () (vl-catch-all-error-message ss))
                                 "?"))))
-    (KG-Mark (strcat "карта ссылок: выборка с фильтром дала "
+    (KG-TraceDetail (strcat "карта ссылок: выборка с фильтром дала "
                      (if ss "набор" "nil")))
   )
   (if (KG-IsErr ss) (setq ss nil))
@@ -2181,7 +2619,7 @@
   (if ss
     (progn
       (setq n (KG-AsNum (KG-Call 'sslength (list ss) 0) 0))
-      (KG-Mark (strcat "карта ссылок: объектов в наборе " (itoa n)))
+      (KG-TraceDetail (strcat "карта ссылок: объектов в наборе " (itoa n)))
       ;; Промежуточный счёт каждые 200 объектов. Прогон на крупном
       ;; реципиенте (1231 вставка) оборвался с 0xC0000005 сразу после
       ;; строки «объектов в наборе 1231» -- без промежуточных меток
@@ -2241,6 +2679,21 @@
                                 (KG-CdrCI tgt out))
                           out))
                     )
+                    ;; Скрытые ссылки экземпляра: представление (*U)
+                    ;; держится не группой 2, а xdata/словарём самого
+                    ;; экземпляра. Без этого чтения живое представление
+                    ;; выглядело сиротой, и стирание сломало бы живой
+                    ;; экземпляр. Имена -- в ту же карту, с тем же
+                    ;; владельцем.
+                    (foreach hx (KG-Call 'KG-HiddenRefNames (list ed) nil)
+                      (if (/= (KG-AsString hx) "")
+                        (setq out
+                          (KG-SetAssoc (KG-AsString hx)
+                            (cons (if defnm defnm "неизвестно")
+                                  (KG-CdrCI (KG-AsString hx) out))
+                            out))
+                      )
+                    )
                   )
                 )
               )
@@ -2249,12 +2702,89 @@
         )
         (setq i (1+ i))
       )
-      (KG-Mark (strcat "карта ссылок: пройдено объектов "
+      (KG-TraceDetail (strcat "карта ссылок: пройдено объектов "
                        (KG-NumStr KG-REFDONE) " из " (itoa n)))
       (setq out (cons "OK" out))
     )
   )
   out
+)
+
+;; Имена, на которые экземпляр ссылается СКРЫТО. Представление (*U)
+;; динамического блока держится экземпляром не группой 2, а xdata (1005)
+;; и/или словарём экземпляра (360 -> записи 350/360). Прогон сборки 71:
+;; очистка считала такое представление сиротой (вставок с его именем в
+;; чертеже нет) и пыталась стереть -- живой экземпляр мог потерять своё
+;; представление. Теперь скрытые имена попадают в карту ссылок, и живое
+;; представление сиротой не выглядит.
+(defun KG-ResolveRefName (v)
+  ;; Значение ссылки -- строка-handle или ename. Отдаём имя определения.
+  (cond
+    ((null v) nil)
+    ((= (type v) (type "")) (KG-RecordNameOf (KG-AsString v)))
+    (t (KG-Safe '(lambda () (KG-AsString (cdr (assoc 2 (entget v))))) nil))
+  )
+)
+
+;; ename по строке-handle; уже ename возвращается как есть.
+(defun KG-RefEntOf (v)
+  (cond
+    ((null v) nil)
+    ((= (type v) (type "")) (KG-Safe '(lambda () (handent (KG-AsString v))) nil))
+    (t v)
+  )
+)
+
+;; Имена из словаря (записи 350 и вложенные словари 360). Глубина
+;; ограничена: глубже -- уже не словарь экземпляра.
+(defun KG-DictRefNames (d dep / out de v q x)
+  (setq out nil)
+  (if (and d (> dep 0))
+    (progn
+      (setq de (KG-Safe '(lambda () (entget d)) nil))
+      (foreach v de
+        (if (and (not (= (type v) (type "")))
+                 (= (car v) 350))
+          (progn
+            (setq q (KG-ResolveRefName (cdr v)))
+            (if q (setq out (cons q out)))
+          )
+        )
+        (if (and (not (= (type v) (type "")))
+                 (= (car v) 360))
+          (progn
+            (setq q (KG-RefEntOf (cdr v)))
+            (foreach x (KG-DictRefNames q (1- dep))
+              (setq out (cons x out))
+            )
+          )
+        )
+      )
+    )
+  )
+  out
+)
+
+;; Скрытые ссылки экземпляра: xdata (1005) + словарь (360).
+(defun KG-HiddenRefNames (ed / out x v q)
+  (setq out nil)
+  (foreach x (cdr (assoc -3 ed))
+    (if (not (= (type x) (type "")))
+      (foreach v x
+        (if (and (not (= (type v) (type "")))
+                 (= (car v) 1005))
+          (progn
+            (setq q (KG-ResolveRefName (cdr v)))
+            (if q (setq out (cons q out)))
+          )
+        )
+      )
+    )
+  )
+  (foreach v (KG-DictRefNames (KG-RefEntOf (cdr (assoc 360 ed))) 3)
+    (setq out (cons v out))
+  )
+  (KG-Unique out)
 )
 
 (defun KG-CleanupEraseAllowed (flag orph noxref)
@@ -2269,12 +2799,12 @@
 ;; Выполнить под перехватом; при неудаче записать шаг и текст ошибки.
 ;; Лямбда КВОТИРОВАННАЯ: вычисленная в AutoCAD превращается в SUBR и
 ;; vl-catch-all-apply её отвергает.
-(defun KG-DBX-Try (step fn / r)
-  (setq r (vl-catch-all-apply fn))
-  (if (KG-IsErr r)
-    (KG-DBX-Fail (strcat step ": "
-                         (KG-AsString (vl-catch-all-error-message r))))
-    r
+(defun KG-DBX-Try (kg-step kg-fn / kg-res)
+  (setq kg-res (vl-catch-all-apply kg-fn))
+  (if (KG-IsErr kg-res)
+    (KG-DBX-Fail (strcat kg-step ": "
+                         (KG-AsString (vl-catch-all-error-message kg-res))))
+    kg-res
   )
 )
 
@@ -2421,7 +2951,7 @@
 ;; Карта интеграции (Этап 4).
 (defun KG-BuildIntegrationMap (model mastername beforedefs / p base newiter
                                      scan groups nested newnested existing
-                                     tocreate toexist torename out)
+                                     tocreate toexist torename out dv)
   (setq p (KG-ParseBlockName mastername))
   (if (null p)
     nil
@@ -2430,6 +2960,21 @@
       (setq newiter (nth 1 p))
       (setq scan (KG-ScanFamily model base newiter))
       (setq groups (cdr (assoc "groups" scan)))
+      ;; 71.3: определения семьи без вставок. Сканирование видит только
+      ;; экземпляры, поэтому вариант, существующий лишь определением
+      ;; («Комплект КП50К стойка КП45370 v1.3» без единой вставки), остался
+      ;; бы без новой версии. Он добавляется в группы пустым: определение
+      ;; создастся из мастера (или уже есть), вставок по-прежнему ноль.
+      (if (KG-FlexFamilyP base newiter)
+        (foreach dv (KG-FindOldFamilyDefs model base newiter)
+          (if (not (KG-StrInterCI (list (nth 2 (cdr dv)))
+                                  (mapcar 'car groups)))
+            (setq groups
+              (append groups (list (cons (nth 2 (cdr dv)) nil))))
+          )
+        )
+      )
+      (setq scan (KG-SetAssoc "groups" groups scan))
       ;; ВАЖНО: классификация «обновить / добавить» считается по снимку
           ;; таблицы блоков ДО вставки. После вставки новые определения уже
           ;; есть в файле, и по текущему состоянию их не отличить от старых.
@@ -2490,8 +3035,8 @@
       (vl-remove-if-not
         '(lambda (pr)
            (or (/= (nth 1 (cdr pr)) "")
-               (KG-StrContains (KG-CdrCI "def" (car pr)) "~до")
-               (KG-StrContains (KG-CdrCI "eff" (car pr)) "~до")))
+               (KG-IsTempDefName (KG-CdrCI "def" (car pr)))
+               (KG-IsTempDefName (KG-CdrCI "eff" (car pr)))))
         (KG-FindFamilyInstances model base))
     )
   )
@@ -2499,8 +3044,8 @@
   (setq newpairs nil)
   (foreach ins (KG-ModelInsts model)
     (if (and (KG-IsIntegrationName (KG-CdrCI "eff" ins) base newiter)
-             (not (KG-StrContains (KG-CdrCI "eff" ins) "~до"))
-             (not (KG-StrContains (KG-CdrCI "def" ins) "~до")))
+             (not (KG-IsTempDefName (KG-CdrCI "eff" ins)))
+             (not (KG-IsTempDefName (KG-CdrCI "def" ins))))
       (setq newpairs (cons (cons ins (KG-ParseBlockName (KG-CdrCI "eff" ins)))
                            newpairs))
     )
@@ -2671,6 +3216,22 @@
               (KG-NumStr (cdr (assoc "space-unknown" replaced))))
   )
   (KG-SayKV "Создано вариантов" (KG-NumStr (length created)))
+  (if (cdr (assoc "plan" rep))
+    (progn
+      (KG-SayKV "Снято старых определений семейства"
+                (KG-NumStr (length (cdr (assoc "retired" rep)))))
+      (if (and KG-TRACE (cdr (assoc "retired" rep)))
+        (KG-SayList (cdr (assoc "retired" rep)) 8)
+      )
+    )
+  )
+  (if (cdr (assoc "retire-left" rep))
+    (progn
+      (KG-SayKV "ОСТАЛОСЬ старых определений (есть ссылки)"
+                (KG-NumStr (length (cdr (assoc "retire-left" rep)))))
+      (KG-SayList (cdr (assoc "retire-left" rep)) 8)
+    )
+  )
   (KG-SayKV "Обновлено вложенных определений"
             (KG-NumStr (- (length (cdr (assoc "nested-to-update" plan)))
                           (length (cdr (assoc "nested-stale" rep))))))
@@ -2836,8 +3397,12 @@
 ;;;===========================================================================
 
 ;; Имя, под которым сохраняется старое определение после перевода ссылок
-;; на новое. Осмысленное -- видно, что оно предшествовало итерации iter, --
-;; и без служебных маркеров вроде $0$, _new, "копия" (п. 20 ТЗ).
+;; на новое. Начинается с «~»: в списке блоков и в окне PURGE мусор
+;; прошлых интеграций собирается подряд, отдельно от рабочих имён.
+;; Итерация, если она есть, отделяется вторым «~» -- видно, какой итерации
+;; предшествовало определение. Служебных маркеров вроде $0$, _new,
+;; "копия" (п. 20 ТЗ) в имени нет; «$N$» добавляет только KG-UniqueName,
+;; если имя уже занято.
 ;; Определение, пришедшее из внешней ссылки: имя вида "чертёж|блок".
 ;; Переименовывать такие нельзя -- на реальном чертеже с 264 кандидатами
 ;; попытка дала 0xC0000005. Флаг is-xref у них не выставлен: ссылка --
@@ -2846,8 +3411,12 @@
   (KG-StrContains (KG-AsString nm) "|")
 )
 
-(defun KG-TempDefName (base iter used)
-  (KG-UniqueName (strcat base "~до" (KG-IterToStr iter)) used)
+(defun KG-TempDefName (base iter used / is)
+  (setq is (KG-IterToStr iter))
+  (KG-UniqueName
+    (strcat "~" (KG-AsString base)
+            (if (/= is "") (strcat "~" is) ""))
+    used)
 )
 
 ;; Шаг 1. Освободить имена ДО вставки из буфера.
@@ -2896,7 +3465,7 @@
 ;; Остальные возвращаются на место: освобождать имя имеет смысл только
 ;; тогда, когда на него что-то пришло. Иначе определение, которого в
 ;; новом мастере нет (п. 8.4 ТЗ: не удалять), осталось бы под служебным
-;; именем «имя~до<итерация>», а итоговые имена обязаны быть чистыми.
+;; именем «~имя», а итоговые имена обязаны быть чистыми.
 (defun KG-Step_RollbackNotArrived (renames arrived / out)
   (setq out nil)
   (foreach r renames
@@ -2933,7 +3502,8 @@
   (setq vnames nil parennames nil plainnames nil)
   (foreach nm newdefs
     (if (and (not (KG-IsAnonymousName nm))
-             (not (KG-IsSystemBlockName nm)))
+             (not (KG-IsSystemBlockName nm))
+             (not (KG-IsTempDefName nm)))
       (progn
         (if (and (setq p (KG-ParseVName nm)) (= (nth 2 p) ""))
           (setq vnames (cons nm vnames))
@@ -2988,6 +3558,73 @@
   )
   (if (and (null best) handles)
     (setq best (car handles))
+  )
+  best
+)
+
+;; 71.3. Все мастер-версии, пришедшие из буфера: одна запись на семью --
+;; (имя base итерация). Мастер -- версионное имя без варианта («БАЗА
+;; v1.52»), итерация с точкой (схема заказчика «vN.N»). Вложенные
+;; определения мастерами не считаются: «Опора v2.1» внутри пришедшего
+;; комплекта -- не семья чертежа. Прежний KG-DetectMasterName остаётся
+;; запасным путём: он же обслуживает безверсионную подмену.
+(defun KG-DetectMasterFamilies (newdefs model / out nm p base hit nestedall)
+  (setq out nil)
+  (foreach nm newdefs
+    (if (and (not (KG-IsAnonymousName nm))
+             (not (KG-IsSystemBlockName nm))
+             (not (KG-IsTempDefName nm)))
+      (progn
+        (setq p (KG-ParseVName nm))
+        (if (and p (= (nth 2 p) "") (/= (KG-IterToStr (nth 1 p)) "")
+                 (KG-StrContains (KG-IterToStr (nth 1 p)) "."))
+          (progn
+            (setq base (nth 0 p))
+            (setq hit (KG-AssocCI base out))
+            (if (not hit)
+              (setq out (cons (cons base (list nm base (nth 1 p))) out))
+              (if (KG-IterOlder (nth 2 (cdr hit)) (nth 1 p))
+                (setq out (KG-SetAssoc base (list nm base (nth 1 p)) out))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  (setq out (reverse out))
+  (if (and model out)
+    (progn
+      (setq nestedall nil)
+      (foreach c out
+        (foreach c2 (KG-GetNestedBlocks model (nth 0 (cdr c)))
+          (if (not (KG-StrInterCI (list c2) nestedall))
+            (setq nestedall (cons c2 nestedall))
+          )
+        )
+      )
+      (setq out
+        (vl-remove-if '(lambda (c)
+                         (KG-StrInterCI (list (nth 0 (cdr c))) nestedall))
+                      out))
+    )
+  )
+  (mapcar 'cdr out)
+)
+
+;; Экземпляр-«кирпич» новой мастер-версии из вставки буфера: его
+;; эффективное имя равно имени мастера. nil -- вставки не было.
+(defun KG-FindNewMasterInstance (snap mastername / best h m)
+  (setq best nil)
+  (foreach h (KG-Safe '(lambda () (KG_EXNewInstancesSince snap)) nil)
+    (if (not best)
+      (progn
+        (setq m (KG_EXInstanceHandle h))
+        (if (and m (KG-StrEq (KG-CdrCI "eff" m) mastername))
+          (setq best h)
+        )
+      )
+    )
   )
   best
 )
@@ -3291,6 +3928,33 @@
   n
 )
 
+;; Шаг 8г (сборка 71.3). Снять определения семьи, заменённые актуальной
+;; версией: если под новым именем определение есть, старое больше не нужно --
+;; именно это и означает «обновить определение» при нуле вставок. Снимается
+;; только имя без ссылок: занятое определение AutoCAD удалить не даст, и оно
+;; остаётся (п. 8.4 ТЗ -- занятое не трогаем), а в отчёте видно, что осталось.
+(defun KG-Step_RetireOldDefs (model base newiter mastername arrived
+                              / retired left nm var tgt)
+  (setq retired nil left nil)
+  (if (KG-FlexFamilyP base newiter)
+    (foreach dp (KG-FindOldFamilyDefs model base newiter)
+      (setq nm (car dp))
+      (setq var (nth 2 (cdr dp)))
+      (setq tgt (KG-MakeName base newiter var))
+      (if (and (not (KG-StrEq nm tgt))                     ; не новое имя
+               (not (KG-StrEq nm (KG-AsString mastername))) ; и не мастер
+               (not (KG-StrInterCI (list nm) arrived))      ; новый под этим
+               (KG_EXDefExists tgt))                        ; замена есть
+        (if (KG-Safe '(lambda () (KG_EXDeleteDef nm)) nil)
+          (setq retired (cons nm retired))
+          (setq left (cons nm left))
+        )
+      )
+    )
+  )
+  (cons (reverse retired) (reverse left))
+)
+
 ;; Шаг 5. Убрать технический экземпляр и решить судьбу старых определений.
 ;; По п. 8.4 и 14.4 ТЗ неиспользуемые определения автоматически НЕ удаляются,
 ;; поэтому по умолчанию они остаются под именем "имя~~<итерация-источника>".
@@ -3493,7 +4157,8 @@
                                                 missing v snap beforedefs
                                                 pastesnap arriveddefs stale
                                                 masterfreed handlesnap
-                                                eff a rewired visrest)
+                                                eff a rewired visrest
+                                                retired keepn grp)
   (setq errs nil)
   (setq warns nil)
   (setq mastername (KG-MakeName base newiter ""))
@@ -3530,7 +4195,7 @@
   ;;    содержимое снова стало бы старым.
   ;; Имена уже освобождены ДО вставки (это делает C:INTEGRATE). Если
   ;; переименовать их здесь ещё раз, освобождённое имя мастер-версии
-  ;; снова уйдёт в "~до" и определение окажется пустым -- именно так
+  ;; снова уйдёт в "~имя" и определение окажется пустым -- именно так
   ;; появлялся мусорный вариант "v1.5 до1.5".
   (if KG-PRERENAMES
     (setq renames KG-PRERENAMES)
@@ -3545,7 +4210,7 @@
       ;; выполнена, пришедшего из буфера ждать нечего, а переименование
       ;; оторвало бы мастер-версию от её собственных вложенных
       ;; определений -- в чертеже остался бы блок со ссылками на
-      ;; «Стойка~до8» вместо «Стойка».
+      ;; «~Стойка» вместо «Стойка».
       (progn
         (setq renames nil)
         (princ (strcat "\nВНИМАНИЕ: мастер-блок вставлен вручную, вставка из "
@@ -3595,7 +4260,7 @@
       )
       ;; Имена, которых буфер не принёс, возвращаются на место --
       ;; иначе сторонние семейства и старые вложенные определения
-      ;; остались бы под служебными именами «имя~до<итерация>».
+      ;; остались бы под служебными именами «~имя».
       (setq renames (KG-Step_RollbackNotArrived renames arriveddefs))
       ;; карта handle -> пространство построена до вставки и не знает о
       ;; техническом экземпляре; без перестроения он не читается
@@ -3780,7 +4445,7 @@
       (KG-Mark "перепривязка вложенных вхождений")
       (KG-Step_RewireNested (KG-Safe '(lambda () (KG_DBGetModel)) nil) renames)
       ;; 8б. перепривязка ссылок внутри определений на прежние имена.
-      ;; Идёт ДО очистки: освобождённые здесь служебные определения «~до»
+      ;; Идёт ДО очистки: освобождённые здесь служебные определения «~ИМЯ»
       ;; очистка снимет тем же прогоном.
       (KG-Mark "перепривязка ссылок на прежние имена")
       (setq rewired (KG-Safe '(lambda () (KG-Step_RewireDefs renames)) 0))
@@ -3790,6 +4455,15 @@
       (KG-Mark "возврат состояний вложенных блоков")
       (setq visrest (KG-Safe '(lambda () (KG-Step_RestoreNestedVis renames))
                              (list 0 0 0)))
+      ;; 8г. старые определения семьи, заменённые актуальной версией,
+      ;; снимаются: иначе рядом с новой версией остаётся прежняя и
+      ;; «обновление» определения при нуле вставок не видно.
+      (KG-Mark "снятие старых определений семейства")
+      (setq retired
+        (KG-Safe '(lambda ()
+                    (KG-Step_RetireOldDefs
+                      (KG_DBGetModel) base newiter mastername arriveddefs))
+                 (cons nil nil)))
       ;; 9. технический экземпляр и старые определения
       (KG-Mark "удаление технического экземпляра")
       (setq deleted (KG-Step_Cleanup renames techhandle))
@@ -3797,11 +4471,30 @@
       (KG-Mark "контроль результата")
       (setq val (KG-ValidateIntegration (KG-Safe '(lambda () (KG_DBGetModel)) nil) base newiter
                    (cdr (assoc "groups" (cdr (assoc "scan" plan))))))
+      ;; 71.3: что очистка обязана сохранить -- мастер-версию и определения
+      ;; всех вариантов этой семьи (в том числе созданные без вставок).
+      (setq keepn nil)
+      (foreach grp (cdr (assoc "groups" (cdr (assoc "scan" plan))))
+        (setq keepn (cons (KG-MakeName base newiter (car grp)) keepn))
+      )
+      (if (and mastername (not (KG-StrInterCI (list mastername) keepn)))
+        (setq keepn (cons mastername keepn))
+      )
+      (setq keepn (reverse keepn))
+      (setq KG-KEEPNAMES
+        (append keepn
+                (vl-remove-if '(lambda (x) (KG-StrInterCI (list x) keepn))
+                              KG-KEEPNAMES)))
       (list
          (cons "plan" plan)
          (cons "renames" renames)
          (cons "created" created)
          (cons "replaced" rep)
+         ;; 71.3: судьба старых определений семьи
+         (cons "retired" (car retired))
+         (cons "retire-left" (cdr retired))
+         ;; 71.3: имена, которые обязана сохранить очистка
+         (cons "keep-names" keepn)
          (cons "deleted-defs" deleted)
          (cons "rewired" (KG-AsNum rewired 0))
          (cons "vis-nested-restored" visrest)
@@ -3868,9 +4561,9 @@
           (if sub
             (progn
               (setq nm (KG-Safe '(lambda () (KG-EffectiveNameOf sub)) nil))
-              ;; Сравнение с учётом суффикса «~до»: старое определение
+              ;; Сравнение с учётом служебной отметки: старое определение
               ;; переименовано ДО чтения экземпляра, поэтому состояние
-              ;; прочитано под именем «Стойка КП50~до», а в новом
+              ;; прочитано под именем «~Стойка КП50», а в новом
               ;; определении вложенный блок называется «Стойка КП50».
               ;; В сборке 39 функция KG-NestedKeyMatch была написана, но
               ;; НЕ ВЫЗВАНА ни разу: здесь осталось прежнее KG-StrEq, и
@@ -3940,9 +4633,22 @@
   e
 )
 
+;; Сущность ЗАПИСИ определения? Признак один: группа 0 равна "BLOCK" --
+;; у первого объекта ВНУТРИ определения она своя ("LINE", "INSERT" и
+;; т. д.). Нужно потому, что группы -1 и -2 в tblsearch на живом
+;; AutoCAD разные (см. KG-DefEnt): ENTD целится только в запись, обход
+;; содержимого -- только от записи. Нечитаемый entget (тестовый стенд)
+;; не отвергается: отвергается лишь доказанно не запись.
+(defun KG-DefRecEnt (e / ed)
+  (setq ed (if e (KG-Safe '(lambda () (entget e)) nil) nil))
+  (or (null ed)
+      (KG-StrEq (KG-AsString (cdr (assoc 0 ed))) "BLOCK"))
+)
+
 (defun KG-DefEnt (defname / e r src)
   (setq e (KG-Safe '(lambda () (tblobjname "BLOCK" (KG-AsString defname)))
                    nil))
+  (if (not (KG-DefRecEnt e)) (setq e nil))
   (if e (setq src "tblobjname"))
   (if (null e)
     (progn
@@ -3955,17 +4661,28 @@
       ;; -2 -- это ename первого объекта ВНУТРИ определения, и у пустого
       ;; или анонимного представления её может не быть вовсе. Код брал
       ;; только -2, поэтому ename не находился никогда.
-      (if r (setq e (cdr (assoc -2 r))))
+      ;;
+      ;; ПРОГОН СБОРКИ 71 показал последствие выбора «-2 первым»: ENTD
+      ;; целился в первый вложенный примитив (стирал не блок, а его), а
+      ;; обход содержимого начинался со ВТОРОГО примитива -- первая
+      ;; вставка в каждом представлении не читалась, ссылки на прежние
+      ;; имена не находились, и «~ИМЯ» держались невидимыми вложениями.
+      ;; Теперь берётся та группа, чья сущность -- запись (группа 0
+      ;; "BLOCK"): документированная -1 проверяется раньше, -2 -- после.
+      (if r (setq e (cdr (assoc -1 r))))
+      (if (not (KG-DefRecEnt e)) (setq e nil))
       (if e
-        (setq src "tblsearch (-2)")
+        (setq src "tblsearch (-1)")
         (progn
-          (if r (setq e (cdr (assoc -1 r))))
-          (if e (setq src "tblsearch (-1)"))
+          (if r (setq e (cdr (assoc -2 r))))
+          (if (not (KG-DefRecEnt e)) (setq e nil))
+          (if e (setq src "tblsearch (-2)"))
         )
       )
       (if (null e)
         (progn
           (setq e (KG-Safe '(lambda () (KG-DefEntViaCom defname)) nil))
+          (if (not (KG-DefRecEnt e)) (setq e nil))
           (if e (setq src "COM"))
         )
       )
@@ -3974,7 +4691,7 @@
                                 "\" взят из " src))
         (KG-Mark (strcat "нет BLOCK для \"" (KG-AsString defname)
                          "\": tblobjname -> nil, tblsearch -> "
-                         (if r "запись без -1 и -2" "nil")
+                         (if r "в записи нет ename примитива BLOCK" "nil")
                          ", COM -> nil"))
       )
     )
@@ -4070,8 +4787,8 @@
 ;; Возвращает список моделей экземпляров.
 (defun KG-CollectInstances ( / ss i e obj m out skipped nospace iserr msg)
   (setq out nil skipped 0 nospace 0)
-  (KG-Mark "сбор вхождений блоков")
-  (KG-Mark "карта handle -> пространство")
+  (KG-TraceDetail "сбор вхождений блоков")
+  (KG-TraceDetail "карта handle -> пространство")
   (setq KG-SPACE-MAP (KG-BuildSpaceMap))
   (setq ss (ssget "_X" '((0 . "INSERT"))))
   (if ss
@@ -4158,7 +4875,7 @@
   ;; ни разу за четыре чтения модели. Значит отказ в этой группе, но из
   ;; четырёх вызовов под одним перехватом не видно, в каком именно.
   ;; Теперь каждый этап назван отдельно, и отказ одного не мешает другим.
-  (setq KG-CNT-OK (KG-Safe '(lambda () (KG-Mark "счёт вхождений") t) nil))
+  (setq KG-CNT-OK (KG-Safe '(lambda () (KG-TraceDetail "счёт вхождений") t) nil))
   (if (not KG-CNT-OK)
     (princ (strcat "\nВНИМАНИЕ: не поставилась метка \"счёт вхождений\" ("
                    (KG-FailText) ")."))
@@ -4663,7 +5380,7 @@
       (setq map (KG-BuildSpaceMapByLayouts))
     )
   )
-  (KG-Mark (strcat "карта пространств: " (itoa (length map))
+  (KG-TraceDetail (strcat "карта пространств: " (itoa (length map))
                     " объектов, пространств пройдено: " (itoa n)))
   (reverse map)
 )
@@ -4833,7 +5550,7 @@
 ;;;--- Адаптер чтения: построение модели чертежа -----------------------------
 
 (defun KG_DBGetModel ( / defs insts lays blk e defs-l insts-l nm d err)
-  (KG-Mark "чтение таблицы блоков")
+  (KG-TraceDetail "чтение таблицы блоков")
   (setq defs-l nil)
   ;; список пропущенных сбрасывается на каждый прогон: иначе имена
   ;; прошлого отказа висели бы в отчёте следующего.
@@ -4896,7 +5613,7 @@
   ;; Метка ПОСЛЕ цикла: по ней видно, дочитан ли список определений.
   ;; Без неё «чтение определения "X"» оставалась последней меткой и
   ;; при отказе в самом обходе коллекции -- то есть указывала не туда.
-  (KG-Mark "таблица блоков прочитана")
+  (KG-TraceDetail "таблица блоков прочитана")
   ;; Счётчик прочитанных определений -- и заодно диагностика.
   ;;
   ;; Прогон сборки 57: интеграция прошла полностью, но шесть раз
@@ -4932,7 +5649,7 @@
   ;; Сбор вхождений может не дочитаться (прогон сборки 49). Лучше
   ;; INTEGRATE продолжится с неполными данными и назовёт причину, чем
   ;; оборвётся посередине, оставив имена освобождёнными.
-  (KG-Mark "сбор вхождений")
+  (KG-TraceDetail "сбор вхождений")
   (setq insts-l (KG-Safe '(lambda () (KG-CollectInstances)) nil))
   (if (and (null insts-l) KG-FAIL-STEP)
     (princ (strcat "\nВНИМАНИЕ: вхождения не прочитаны ("
@@ -5012,7 +5729,7 @@
     (progn
       (setq def (KG_DefNameOfEnt en))
       (setq eff (KG-AsString (KG-EffectiveNameOf obj)))
-      (KG-Mark (strcat "вложенные состояния: вставка указывает на \""
+      (KG-TraceDetail (strcat "вложенные состояния: вставка указывает на \""
                        def "\", эффективное имя \"" eff "\""))
       (if (KG-IsAnonDynName def)
         (progn
@@ -5022,7 +5739,7 @@
         ;; представления нет: состояния вложенных блоков этого экземпляра
         ;; равны состояниям по умолчанию в родительском определении
         (progn
-          (KG-Mark (strcat "вложенные состояния: представления нет, читаю "
+          (KG-TraceDetail (strcat "вложенные состояния: представления нет, читаю "
                            "определение \"" eff "\""))
           (if (/= eff "")
             (progn
@@ -5065,7 +5782,7 @@
       )
     )
   )
-  (KG-Mark (strcat "в определении \"" (KG-AsString defname)
+  (KG-TraceDetail (strcat "в определении \"" (KG-AsString defname)
                    "\" вложенных вставок: " (itoa cnt)
                    ", состояний прочитано: " (itoa (length out))))
   (reverse out)
@@ -5163,7 +5880,7 @@
 ;;
 ;; Один проход по всем определениям, включая содержимое других
 ;; определений. По имени понять, свободно ли определение, нельзя: PURGE
-;; отказывается удалять «X~до», пока на него ссылается хотя бы одно
+;; отказывается удалять «~X», пока на него ссылается хотя бы одно
 ;; вхождение -- в том числе внутри другого неиспользуемого определения.
 ;; Карта ссылок на определения: имя -> список определений, внутри
 ;; которых есть его вставка (с повторами, длина списка = число ссылок).
@@ -5180,23 +5897,79 @@
 ;; получит ноль ссылок. Это осознанно -- удаление родителя AutoCAD всё
 ;; равно отклонит, пока живо его анонимное представление, а
 ;; многопроходный цикл сначала убирает сиротские *U.
+;; 71.3. Якорные вложения: PURGE снимает определение, только когда на него
+;; никто не ссылается, а мастер-версия и вариант с нулём вставок выглядят
+;; именно «мёртвыми». На время очистки на защищённые имена ставятся
+;; технические вложения в начало координат; снимаются в конце очистки
+;; (KG-PurgeAnchorsDrop), в том числе обработчиком ошибок.
+(defun KG-PurgeAnchorsEnsure ( / nm protect e before)
+  (if (null KG-PURGE-ANCHORS)
+    (progn
+      (setq protect
+        (KG-CleanupKeepAll (KG-Safe '(lambda () (KG_EXAllDefNames)) nil)))
+      (foreach nm protect
+        (setq before (entlast))
+        (if (KG-Safe '(lambda () (entmake (list '(0 . "INSERT")
+                                                (cons 2 nm)
+                                                '(10 0.0 0.0 0.0))))
+                     nil)
+          (progn
+            (setq e (entlast))
+            (if (not (eq e before))
+              (setq KG-PURGE-ANCHORS (cons (cons nm e) KG-PURGE-ANCHORS))
+            )
+          )
+        )
+      )
+      (if (and KG-TRACE-DETAIL KG-PURGE-ANCHORS)
+        (princ (strcat "\nЗащита от PURGE: якорных вложений "
+                       (itoa (length KG-PURGE-ANCHORS))))
+      )
+    )
+  )
+)
+
+;; Снять якорные вложения. Если якорь создал анонимное представление
+;; динамического блока (*U), оно снимается сразу же: после снятия якоря оно
+;; осталось бы сиротой и копилось бы новым мусором.
+(defun KG-PurgeAnchorsDrop ( / p e g2)
+  (foreach p KG-PURGE-ANCHORS
+    (setq e (cdr p))
+    (setq g2 (KG-Safe '(lambda () (cdr (assoc 2 (entget e)))) nil))
+    (KG-Safe '(lambda () (entdel e)) nil)
+    (if (and g2 (= (type g2) (type "")) (KG-IsAnonDynName g2))
+      (KG-Safe '(lambda () (KG_EXEraseAnonDef g2)) nil)
+    )
+  )
+  (setq KG-PURGE-ANCHORS nil)
+)
+
 ;; Два прохода AutoCAD PURGE по блокам. Два, а не один: сиротские *U
 ;; держат на себе старые вложенные определения, первый проход снимает
 ;; *U, второй -- освободившееся. Ровно то, что вручную делает двойной
 ;; PURGE, и PURGE в отличие от нас живое представление не тронет.
-(defun KG-CleanupPurgeBlocks ( / n ce)
+(defun KG-CleanupPurgeBlocks ( / n ce mt)
   ;; Ключевые слова с подчёркиванием (_B, _N): без него AutoCAD ждёт
   ;; букву своей локализации, а у пользователя AutoCAD русский.
   ;; Пустого ввода в конце быть не должно: после _N PURGE завершается
   ;; сам, а лишний Enter уходит в командную строку и повторяет
   ;; последнюю команду -- отсюда «Неизвестная команда INTCLEANUP».
+  ;; 71.3: пока определение «использовано» -- а якорное вложение именно это
+  ;; и делает -- PURGE его не снимает. Иначе мастер-версия и варианты с
+  ;; нулём вставок вычищались бы подчистую.
+  (KG-PurgeAnchorsEnsure)
   (setq ce (getvar "CMDECHO"))
+  ;; NOMUTT гасит служебные сообщения PURGE вида «Удаление блок "..."»:
+  ;; на реальном чертеже их больше сотни, и они переполняли журнал.
+  (setq mt (getvar "NOMUTT"))
   (setvar "CMDECHO" 0)
+  (setvar "NOMUTT" 1)
   (setq n 0)
   (while (< n 3)
     (KG-Safe '(lambda () (command "_.-PURGE" "_B" "*" "_N")) nil)
     (setq n (1+ n))
   )
+  (setvar "NOMUTT" mt)
   (setvar "CMDECHO" ce)
   t
 )
@@ -5764,15 +6537,15 @@
 ;;;
 ;;; PURGE здесь не помогает из-за ПОРЯДКА: старый вариант семейства
 ;;; («Комплект КП50 v1.1») сам больше никем не используется, но СОДЕРЖИТ
-;;; вхождения определений «…~до». Пока он не удалён, каждое «…~до»
+;;; вхождения служебных определений. Пока он не удалён, каждое служебное
 ;;; считается использованным и не очищается. Команда удаляет в несколько
 ;;; проходов: за один проход освобождается то, на что ссылок не осталось.
 ;;;
 ;;; Новейшая итерация каждого семейства не удаляется даже при нуле
 ;;; ссылок -- это источник, из которого строятся варианты.
 (defun KG-CleanupRun ( / holders counts names keep cand nm deleted progress
-                        round ans hh orph left udel ufail uor inside round2
-                        noxref goon uor2)
+                        round ans hh orph left udel ufail uor uwhy inside round2
+                        noxref goon uor2 rpairs rn n1 n uerr)
   (vl-load-com)
   (princ "\n=== INTCLEANUP: очистка определений прошлой интеграции ===")
 
@@ -5792,7 +6565,7 @@
   (setq counts (KG-CleanupCounts holders))
   (KG-Mark "очистка: список определений")
   (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
-  (setq keep (KG-CleanupKeepNewest names))
+  (setq keep (KG-CleanupKeepAll names))
   (KG-Mark "очистка: подбор кандидатов")
   (setq cand (KG-CleanupCandidates counts names keep))
   (setq orph (KG-CleanupOrphans counts names))
@@ -5809,8 +6582,11 @@
         (princ (strcat "\nСиротских анонимных представлений (*U): "
                        (itoa (length orph))))
       )
-      (if (and KG-TRACE cand) (KG-PrincList cand 10))
-      (if (and KG-TRACE orph) (KG-PrincList orph 10))
+      ;; Списки имён целиком -- только при KG-TRACE-DETAIL: на большом
+      ;; чертеже это сотни строк, и хвост журнала терялся. Числа
+      ;; печатаются всегда, а имена остатка -- в конце, с держателями.
+      (if (and KG-TRACE-DETAIL cand) (KG-PrincList cand 10))
+      (if (and KG-TRACE-DETAIL orph) (KG-PrincList orph 10))
       (setq ans "Да")
       (if KG-CLEANUP-ASK
         (progn
@@ -5821,7 +6597,21 @@
       )
       (if (or (KG-StrEq ans "Да") (KG-StrEq ans "Yes"))
         (progn
-          (setq deleted nil udel nil ufail nil)
+          ;; Сначала -- возврат ссылок с прошлых имён. Без этого шага
+          ;; «~ИМЯ» держатся вложениями внутри чужих определений и
+          ;; анонимных представлений: они «использованы», и ни PURGE, ни
+          ;; стирание их не берут. Возврат делает это молча и адресно --
+          ;; именно этого не хватало, чтобы очистка доходила до конца.
+          (setq rpairs (KG-Call 'KG-CleanupRestorePairs (list names) nil))
+          (if rpairs
+            (progn
+              (KG-Mark "очистка: возврат ссылок с прошлых имён")
+              (setq rn (KG-AsNum (KG-Call 'KG-Step_RewireDefs (list rpairs) 0) 0))
+              (princ (strcat "\nВозвращено ссылок с прошлых имён: "
+                             (itoa rn)))
+            )
+          )
+          (setq deleted nil udel nil ufail nil uwhy nil uerr nil)
           (setq round 0)
           (if KG-CLEANUP-DELETE
             (progn
@@ -5833,7 +6623,7 @@
                   (KG-Unmark (KG-Safe '(lambda () (KG-EXRefHolders)) nil)))
                 (setq counts (KG-CleanupCounts holders))
                 (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
-                (setq keep (KG-CleanupKeepNewest names))
+                (setq keep (KG-CleanupKeepAll names))
                 (setq cand (KG-CleanupCandidates counts names keep))
                 (setq progress nil)
                 (foreach nm cand
@@ -5866,12 +6656,22 @@
                                  (itoa round2)))
                 (foreach nm uor
                   (KG-TraceDetail (strcat "стирание \"" nm "\""))
-                  (if (KG-Safe '(lambda () (KG_EXEraseAnonDef nm)) nil)
+                  (if (KG-Call 'KG_EXEraseAnonDef (list nm) nil)
                     (progn
                       (setq udel (cons nm udel))
                       (setq goon t)
                     )
                     (setq ufail (cons nm ufail))
+                  )
+                  (setq uwhy
+                    (KG-SetAssoc (KG-AsString KG-ERASE-WHY)
+                      (1+ (KG-WhyCount KG-ERASE-WHY uwhy))
+                      uwhy)
+                  )
+                  ;; Текст отказа запоминается один раз -- первый непустой:
+                  ;; он и печатается в разборе.
+                  (if (and (null uerr) (/= (KG-AsString KG-ERASE-ERR) ""))
+                    (setq uerr (KG-AsString KG-ERASE-ERR))
                   )
                 )
                 (setq holders
@@ -5896,26 +6696,62 @@
           (setq counts (KG-CleanupCounts holders))
           (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
           (setq uor2 (KG-CleanupOrphans counts names))
+          (setq n1 (length udel))
           (if (and KG-CLEANUP-ERASE-U uor2)
             (progn
               (KG-Mark (strcat "очистка: стирание *U после PURGE ("
                                (itoa (length uor2)) ")"))
               (foreach nm uor2
                 (KG-TraceDetail (strcat "стирание \"" nm "\""))
-                (if (KG-Safe '(lambda () (KG_EXEraseAnonDef nm)) nil)
+                (if (KG-Call 'KG_EXEraseAnonDef (list nm) nil)
                   (setq udel (cons nm udel))
                   (setq ufail (cons nm ufail))
+                )
+                (setq uwhy
+                  (KG-SetAssoc (KG-AsString KG-ERASE-WHY)
+                    (1+ (KG-WhyCount KG-ERASE-WHY uwhy))
+                    uwhy)
+                )
+                (if (and (null uerr) (/= (KG-AsString KG-ERASE-ERR) ""))
+                  (setq uerr (KG-AsString KG-ERASE-ERR))
                 )
               )
             )
           )
+          ;; Стирание могло освободить определения -- снимаем их сразу,
+          ;; не дожидаясь следующего запуска очистки.
+          (if (> (length udel) n1)
+            (progn
+              (KG-Mark "очистка: PURGE после стирания *U")
+              (KG-Safe '(lambda () (KG-CleanupPurgeBlocks)) nil)
+            )
+          )
 
+          ;; Разбор отказов стирания *U: по одному «не удалось: N» не
+          ;; видно, что мешает. Печатается одной строкой и только когда
+          ;; отказы есть.
+          (if (and KG-TRACE ufail)
+            (princ (strcat "\nСиротских *U не стёрлось: "
+                           (itoa (length (KG-Unique ufail)))
+                           " (многострочная вставка: "
+                           (itoa (KG-WhyCount "minsert" uwhy))
+                           "; ENTD отказал: "
+                           (itoa (KG-WhyCount "entdel" uwhy))
+                           "; ename не найден: "
+                           (itoa (KG-WhyCount "noent" uwhy))
+                           "; определение осталось после ENTD: "
+                           (itoa (KG-WhyCount "left" uwhy)) ")")))
+          ;; Платформенное объяснение отказа: текст ошибки ENTD, если он был.
+          ;; Так «ENTD отказал: 38» превращается в называемую причину.
+          (if (and KG-TRACE uerr)
+            (princ (strcat "\nENTD ответил: «" uerr "»"))
+          )
           (KG-Mark "очистка: контроль после PURGE")
           (setq holders
             (KG-Unmark (KG-Safe '(lambda () (KG-EXRefHolders)) nil)))
           (setq counts (KG-CleanupCounts holders))
           (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
-          (setq keep (KG-CleanupKeepNewest names))
+          (setq keep (KG-CleanupKeepAll names))
           (setq left (KG-CleanupCandidates counts names keep))
           (setq orph (KG-CleanupOrphans counts names))
           (if (or (> (length left) 0) (> (length orph) 0))
@@ -5924,9 +6760,49 @@
             (princ "\nНеиспользуемых определений не осталось.")
           )
           (if (and KG-TRACE left)
-            (foreach nm left
-              (princ (strcat "\n  " nm " -- держит: "
-                             (KG-CleanupHolderText holders nm)))
+            (progn
+              (setq n 0)
+              (foreach nm left
+                (if (< n 10)
+                  (progn
+                    (princ (strcat "\n  " nm " -- держит: "
+                                   (KG-CleanupHolderText holders nm)))
+                    (setq n (1+ n))
+                  )
+                  (if (= n 10)
+                    (progn
+                      (princ (strcat "\n  ... и ещё "
+                                     (itoa (- (length left) 10))))
+                      (setq n (1+ n))
+                    )
+                  )
+                )
+              )
+            )
+          )
+          ;; Кто держит остаток НА САМОМ ДЕЛЕ. «Прямых вставок нет» -- это
+          ;; про вставки; ссылка может лежать в словаре самого определения:
+          ;; PURGE её видит, обход вставок -- нет, отсюда и отказ ENTD.
+          ;; Пробы читают словари записей и называют то, на что указывают
+          ;; ссылки. Восемь строк: остальное -- числами.
+          (if (and KG-TRACE (or left orph))
+            (progn
+              (KG-Mark "очистка: разбор словарей остатка")
+              (setq n 0)
+              (foreach nm (append left orph)
+                (if (< n 8)
+                  (progn
+                    (setq hh (KG-DefDictProbe nm))
+                    (princ (strcat "\n  " nm ": "
+                                   (if (= hh "") "(словаря не видно)" hh)))
+                    (setq n (1+ n))
+                  )
+                )
+              )
+              (if (> (length (append left orph)) 8)
+                (princ (strcat "\n  ... и ещё "
+                               (itoa (- (length (append left orph)) 8))))
+              )
             )
           )
         )
@@ -5934,6 +6810,7 @@
       )
     )
   )
+  (KG-PurgeAnchorsDrop)
   (length left)
     )
   )
@@ -5942,6 +6819,8 @@
 ;;;--- RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА) ---------------------------------
 (defun C:RDBCLEANUP ( / r)
   (vl-load-com)
+  ;; 71.3: якоря защиты от прошлого прогона, если он падал посреди PURGE
+  (KG-Safe '(lambda () (KG-PurgeAnchorsDrop)) nil)
   (setq r (KG-CleanupRun))
   (princ)
 )
@@ -5961,13 +6840,13 @@
   (princ (strcat "\n=== RDBCOUNT: определений "
                  (itoa (length (if names names nil))) " ==="))
   (setq tot 0)
-  (foreach grp (list (list "ОПРЕДЕЛЕНИЯ ПРОШЛОЙ ИНТЕГРАЦИИ (~до)"
-                           '(lambda (x) (KG-StrContains x "~до")))
+  (foreach grp (list (list "ОПРЕДЕЛЕНИЯ ПРОШЛОЙ ИНТЕГРАЦИИ (~ИМЯ)"
+                           '(lambda (x) (KG-IsTempDefName x)))
                      (list "АНОНИМНЫЕ ПРЕДСТАВЛЕНИЯ (*U)"
                            '(lambda (x) (KG-IsAnonDynName x)))
                      (list "ОСТАЛЬНЫЕ"
                            '(lambda (x)
-                              (and (not (KG-StrContains x "~до"))
+                              (and (not (KG-IsTempDefName x))
                                    (not (KG-IsAnonDynName x))))))
     (setq out nil)
     (foreach nm names
@@ -6001,19 +6880,19 @@
   (setq holders (KG-Unmark (KG-Safe '(lambda () (KG-EXRefHolders)) nil)))
   (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
   (if (null names) (setq names nil))
-  (setq keep (KG-CleanupKeepNewest names))
+  (setq keep (KG-CleanupKeepAll names))
   (setq cand (KG-CleanupCandidates
                (KG-CleanupCounts holders) names keep))
   (setq orph (KG-CleanupOrphans (KG-CleanupCounts holders) names))
   (setq nodo 0 nu 0)
   (foreach nm names
-    (if (KG-StrContains nm "~до") (setq nodo (1+ nodo)))
+    (if (KG-IsTempDefName nm) (setq nodo (1+ nodo)))
     (if (KG-IsAnonDynName nm) (setq nu (1+ nu)))
   )
   (princ (strcat "\n=== КРАТКО (сборка " KG-VERSION ") ==="))
   (princ (strcat "\nОпределений всего: " (itoa (length names))))
-  (princ (strcat "\n  с суффиксом «~до»: " (itoa nodo)))
-  ;; Кто держит определения с «~до». Без этих имён «PURGE не берёт 31
+  (princ (strcat "\n  служебных (~ИМЯ): " (itoa nodo)))
+  ;; Кто держит служебные определения. Без этих имён «PURGE не берёт 31
   ;; определение» -- это просто число, а не диагноз.
   (setq lines (KG-Safe '(lambda () (KG-DoHolderLines holders names)) nil))
   (foreach l lines (princ (strcat "\n" l)))
@@ -6108,6 +6987,10 @@
 
 ;; Обработчик ошибок: восстанавливает системные переменные
 (defun KG-ErrorRestore (msg / )
+  ;; 71.3: если команда падает между PURGE и завершением очистки, якорные
+  ;; вложения защиты снимаются здесь -- иначе в чертеже остались бы лишние
+  ;; вставки.
+  (KG-Safe '(lambda () (KG-PurgeAnchorsDrop)) nil)
   (if KG-SAVED-VARS
     (foreach v KG-SAVED-VARS
       (setvar (car v) (cdr v))
@@ -6129,7 +7012,7 @@
       (setq KG-LAST-ERROR-STEP (KG-AsString KG-LAST-STEP))
       ;; Команда упала между освобождением имени мастер-версии и
       ;; завершением -- возвращаем имя, иначе в списке блоков останется
-      ;; определение "ИМЯ~доN". Возвращаем только если имя свободно:
+      ;; определение "~ИМЯ". Возвращаем только если имя свободно:
       ;; если его уже заняло пришедшее из буфера определение, трогать
       ;; его нельзя.
       (if KG-MASTER-FREED
@@ -6196,7 +7079,7 @@
 
 (defun C:RDB ( / *error* m mastername p base newiter techhandle
                  rep snap snap0 beforedefs afterdefs fb
-                 mdl pre preren hsnap nm cln)
+                 mdl pre preren hsnap nm cln fams fami famn)
   (defun *error* (m) (KG-ErrorRestore m))
   (vl-load-com)
   (KG-SaveVars)
@@ -6204,8 +7087,9 @@
   (princ (strcat "\n=== Подмена / интеграция новой итерации семейства (сборка "
                  KG-VERSION ") ==="))
   (if KG-TRACE
-    (princ (strcat "\nВключена подробная печать шагов (KG-TRACE). "
-                   "Отключается командой (setq KG-TRACE nil).")))
+    (princ (strcat "\nВключена подробная печать шагов (KG-TRACE: этапы). "
+                   "Ещё подробнее: (setq KG-TRACE-DETAIL t). "
+                   "Отключается: (setq KG-TRACE nil).")))
   (setq techhandle nil)
   (setq KG-DO-PASTE nil)
   (setq KG-PRERENAMES nil)
@@ -6216,6 +7100,9 @@
   (setq KG-FREED-N 0)
   (setq KG-PRENAME-FAILED nil)
   (setq KG-VERBOSE nil)
+  (setq KG-KEEPNAMES nil)
+  ;; якоря защиты от прошлого прогона, если он падал посреди PURGE
+  (KG-Safe '(lambda () (KG-PurgeAnchorsDrop)) nil)
 
   ;; Снимок до запроса: по нему видно, вставил ли пользователь блок сам.
   (setq snap0 (KG-SnapshotDrawing))
@@ -6310,6 +7197,13 @@
                            (KG-NumStr (- KG-FREED-N (length preren)))))
           (KG-ReportArrived beforedefs afterdefs)
           (KG-Mark "поиск мастер-версии среди пришедших определений")
+          ;; 71.3: за один прогон обрабатываются ВСЕ семьи, пришедшие из
+          ;; буфера (стойка, ригель, КП50) -- у каждой свой мастер.
+          (setq fams (KG-Safe '(lambda ()
+                                 (KG-DetectMasterFamilies
+                                   KG-ARRIVED
+                                   (KG-Safe '(lambda () (KG_DBGetModel)) nil)))
+                              nil))
           (setq mastername (KG-DetectMasterName KG-ARRIVED))
           (setq KG-MASTER-STATE
             (KG-MasterState mastername beforedefs KG-ARRIVED))
@@ -6364,21 +7258,63 @@
     )
   )
 
-  (if (null base)
+  (if (and (null base) (null fams))
     (princ "\nОШИБКА: не удалось определить мастер-версию.")
     (progn
-      (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
-      (KG-SayKV "Семейство / Блок" base)
-      (if (/= (KG-IterToStr newiter) "")
-        (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
-        (KG-SayKV "Режим" "подмена блока без версий")
+      (if fams
+        ;; 71.3: все семьи буфера за один прогон -- у каждой свой мастер,
+        ;; своя интеграция и свой отчёт.
+        (progn
+          (setq fami 0)
+          (setq famn (length fams))
+          (foreach f fams
+            (setq fami (1+ fami))
+            (setq mastername (nth 0 f))
+            (setq base (nth 1 f))
+            (setq newiter (nth 2 f))
+            (if (> famn 1)
+              (KG-Say (strcat "--- Семейство " (itoa fami) " из " (itoa famn)
+                              ": " (KG-AsString (KG-MakeName base newiter ""))
+                              " ---"))
+              (progn
+                (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
+                (KG-SayKV "Семейство / Блок" base)
+                (if (/= (KG-IterToStr newiter) "")
+                  (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+                  (KG-SayKV "Режим" "подмена блока без версий")
+                )
+                (KG-Say "Область обработки: весь файл")
+              )
+            )
+            (setq techhandle (KG-FindNewMasterInstance snap mastername))
+            (if techhandle
+              (KG-Mark (strcat "семейство " (itoa fami)
+                               ": технический экземпляр "
+                               (KG-AsString techhandle)))
+              (KG-Mark (strcat "семейство " (itoa fami)
+                               ": технический экземпляр не найден"))
+            )
+            (setq KG-PRERENAMES preren)
+            (setq rep (KG-Integrate_Model base newiter techhandle KG-DO-PASTE))
+            (KG-Mark "печать итогового отчёта")
+            (KG-PrintIntegrationReport rep)
+          )
+        )
+        (progn
+          (KG-SayKV "Мастер-версия" (KG-MakeName base newiter ""))
+          (KG-SayKV "Семейство / Блок" base)
+          (if (/= (KG-IterToStr newiter) "")
+            (KG-SayKV "Новая итерация" (KG-IterToStr newiter))
+            (KG-SayKV "Режим" "подмена блока без версий")
+          )
+          (KG-Say "Область обработки: весь файл")
+          (KG-Mark "интеграция выполнена, печать отчёта")
+          (setq KG-PRERENAMES preren)
+          (setq rep (KG-Integrate_Model base newiter techhandle KG-DO-PASTE))
+          (KG-Mark "печать итогового отчёта")
+          (KG-PrintIntegrationReport rep)
+        )
       )
-      (KG-Say "Область обработки: весь файл")
-      (KG-Mark "интеграция выполнена, печать отчёта")
-      (setq KG-PRERENAMES preren)
-      (setq rep (KG-Integrate_Model base newiter techhandle KG-DO-PASTE))
-      (KG-Mark "печать итогового отчёта")
-      (KG-PrintIntegrationReport rep)
       (KG-Mark "регенерация чертежа")
       (command "_.REGEN")
       ;; Очистка -- часть интеграции, а не отдельная обязанность
@@ -6422,6 +7358,9 @@
   (vl-load-com)
   (KG-SaveVars)
   (setq KG-VERBOSE nil)
+  (setq KG-KEEPNAMES nil)
+  ;; якоря защиты от прошлого прогона, если он падал посреди PURGE
+  (KG-Safe '(lambda () (KG-PurgeAnchorsDrop)) nil)
 
   (princ (strcat "\n=== Подмена по выбранному мастер-блоку (сборка "
                  KG-VERSION ") ==="))
@@ -6520,13 +7459,14 @@
 
 ;; Диагностический шаг: выполнить операцию и напечатать результат.
 ;; При ошибке печатает, на каком объекте и каком шаге она случилась.
-(defun KG-DiagStep (who what fn / r)
-  (setq r (vl-catch-all-apply fn))
-  (if (KG-IsErr r)
-    (KG-Say (strcat "  ОШИБКА [" what "] " who " : " (vl-princ-to-string r)))
-    (KG-Say (strcat "  " who "  " what ": " (KG-AsString r)))
+(defun KG-DiagStep (kg-who kg-what kg-fn / kg-res)
+  (setq kg-res (vl-catch-all-apply kg-fn))
+  (if (KG-IsErr kg-res)
+    (KG-Say (strcat "  ОШИБКА [" kg-what "] " kg-who " : "
+                    (vl-princ-to-string kg-res)))
+    (KG-Say (strcat "  " kg-who "  " kg-what ": " (KG-AsString kg-res)))
   )
-  r
+  kg-res
 )
 
 ;;;--- RDBDIAG (INTDIAG, ПДБДИАГ): диагностика чтения чертежа ------------------

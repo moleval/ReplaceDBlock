@@ -70,8 +70,10 @@ ACAD_BUILTINS = {
     "ENTSEL", "ENTUPD", "ENTREG", "TBLOBJNAME", "TBLNEXT", "TBLSEARCH",
     # dictsearch -- поиск в словаре; возвращает подсписок с группами 3, 350,
     # 360. Используется для чтения ACAD_ENHANCEDBLOCK: там лежит имя параметра
-    # видимости динамического блока.
-    "DICTSEARCH",
+    # видимости динамического блока. dictnext -- перебор записей словаря:
+    # нужен разбору держателей остатка (словарные ссылки, из-за которых
+    # PURGE считает определение использованным, а ENTD отказывает).
+    "DICTSEARCH", "DICTNEXT",
     "HANDENT", "SSGET", "SSADD", "SSDEL", "SSLENGTH", "SSNAME", "SSMEMB",
     "SETVAR", "GETVAR", "NENTSEL", "NENTSELP", "ACAD_STRLSORT",
     # Visual LISP: списки и строки
