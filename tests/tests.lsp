@@ -2810,7 +2810,9 @@
       (cons "BST" (list (cons -1 "BST") (cons 0 "BLOCK")
                         (cons 2 "Ступица")))
       (cons "ESTB2" (list (cons -1 "ESTB2") (cons 0 "ENDBLK")))))
-  (setq KG-REWHOLD nil)
+  ;; Карта держателей -- одна на запуск шага перепривязки (71.7): фикстура
+  ;; меняет поддельный чертёж, поэтому карту надо сбросить.
+  (KG-RefMapDrop)
   (setq KG-REWSKIP nil)
   ;; Таблица имён -- COM-функция, на стенде подменяется списком.
   (defun KG_EXAllDefNames ( / )
@@ -2835,9 +2837,9 @@
   (T-EqStr "T21.3 держатели: чужое определение и анонимное представление"
            (KG-JoinNames (KG-DefRefHolders "~Гайка"))
            "Чертеж А, *U900")
-  ;; Кэш: второй вызов обязан отдать тот же результат, а не пересчитывать
-  ;; его по уже изменённой базе.
-  (T-EqStr "T21.4 держатели берутся из кэша"
+  ;; Карта шага: второй вызов обязан отдать тот же результат, а не
+  ;; пересканировать чертёж заново.
+  (T-EqStr "T21.4 держатели берутся из карты шага"
            (KG-JoinNames (KG-DefRefHolders "~Гайка"))
            "Чертеж А, *U900")
   (T-Ok "T21.5 у определения без ссылок держателей нет"
@@ -2968,16 +2970,27 @@
 (defun T22-SetDb ()
   (setq DB-ENTDB
     (list
-      (cons "Обойма" "BO1") (cons "BO1" "EO1") (cons "EO1" "EO2")
-      (cons "EO2" "EOB1")
+      ;; «Шайбы» в новой версии нет -- её вставки в определении просто нет.
+      ;; Сборка 71.5 ищет вставки настоящим обходом определения по группе 2
+      ;; (KG-DefInsertsForKeys, за один проход все состояния сразу), и
+      ;; заглушка поиска больше не нужна: чего в определении нет, того
+      ;; поиск не находит.
+      (cons "Обойма" "BO1") (cons "BO1" "EO1") (cons "EO1" "EOB1")
       (cons "Пустышка" "BP1") (cons "BP1" "EP1") (cons "EP1" "EPB1")
-      (cons "Щиток" "BS1") (cons "BS1" "ES1") (cons "ES1" "ESB1")))
+      (cons "Щиток" "BS1") (cons "BS1" "ES1") (cons "ES1" "ESB1")
+      ;; Определения семейства: состояния возвращаются и им (22c, 22g),
+      ;; вставка «Втулка» у них та же (EO1) -- как и ожидают проверки.
+      (cons "Комплект КП50 v1.5" "BV5") (cons "BV5" "EO1")
+      (cons "Комплект КП50 v1.51 стойка КП45387" "BV1") (cons "BV1" "EO1")))
   (setq DB-ENTDATA
     (list
       (cons "BO1" (list (cons -1 "BO1") (cons 0 "BLOCK") (cons 2 "Обойма")))
       (cons "EO1" (list (cons -1 "EO1") (cons 0 "INSERT") (cons 2 "Втулка")))
-      (cons "EO2" (list (cons -1 "EO2") (cons 0 "INSERT") (cons 2 "Шайба")))
       (cons "EOB1" (list (cons -1 "EOB1") (cons 0 "ENDBLK")))
+      (cons "BV5" (list (cons -1 "BV5") (cons 0 "BLOCK")
+                        (cons 2 "Комплект КП50 v1.5")))
+      (cons "BV1" (list (cons -1 "BV1") (cons 0 "BLOCK")
+                        (cons 2 "Комплект КП50 v1.51 стойка КП45387")))
       (cons "BP1" (list (cons -1 "BP1") (cons 0 "BLOCK")
                         (cons 2 "Пустышка")))
       (cons "EP1" (list (cons -1 "EP1") (cons 0 "LINE")))
@@ -3000,17 +3013,15 @@
     (if (KG-StrEq nm "Обойма")
       (list (cons "Втулка" "Открыто") (cons "Шайба" "Скрыто"))
       nil))
-  ;; Поиск вложенной вставки по имени: «Шайбы» в новой версии нет.
-  ;; Вложение «Втулка» есть и у определения семейства -- иначе исключение
-  ;; семейства по схеме имени проверялось бы не им, а отсутствием вложения.
-  (defun KG-DefInsertByName (defname nestedname / )
-    (if (and (KG-StrEq nestedname "Втулка")
-             (or (KG-StrEq defname "Обойма")
-                 (KG-StrEq defname "Комплект КП50 v1.5")
-                 (KG-StrEq defname "Комплект КП50 v1.51 стойка КП45387")
-                 (KG-StrEq defname "Комплект КП50 v1.51 стойка КП45303-2")))
-      "EO1"
-      nil))
+  ;; Поиск вложенной вставки по имени: «Шайбы» в новой версии нет, а
+  ;; «Втулка» есть -- и у сборки, и у определения семейства (иначе
+  ;; исключение семейства по схеме имени проверялось бы не именем вложения,
+  ;; а его отсутствием).
+  ;;
+  ;; Заглушки поиска здесь больше НЕТ: «нет Шайбы» выражено составом
+  ;; DB-ENTDB выше, а настоящий поиск вставок проверяет TEST-SpeedUp.
+  ;; Заглушка пережила бы T22 и сломала бы T28: вызовы идут по глобальному
+  ;; имени, и восстановить настоящую функцию после подмены нечем.
   (setq T22-SET nil)
   (defun KG-SetVisibilityState (obj val / )
     (setq T22-CALLS (cons (strcat (KG-AsString obj) "=" (KG-AsString val))
@@ -3724,6 +3735,322 @@
         (DB-HasDef "Комплект КП50К стойка КП45370 v1.3"))
 )
 
+;;;===========================================================================
+;;; T27. ЗАМЕРЫ ВРЕМЕНИ (сборка 71.4)
+;;;
+;;; Тайминги обязаны молчать без KG-TIMING; не падать и не накапливать
+;;; время без MILLISECS (в стенде getvar её не знает); считать дельты и
+;;; итог, когда время есть. KG-MarkT обязан работать как KG-Mark.
+
+(defun TEST-Timing ( / )
+  (princ "\n\nT27. Замеры времени (KG-TIMING)")
+
+  ;; 27a. Без флага -- тишина и пустой журнал.
+  (setq KG-TIMING nil)
+  (KG-TimeReset)
+  (KG-TimeMark "шаг без флага")
+  (T-Ok "T27.1 без KG-TIMING журнал пуст" (null KG-TLINES))
+
+  ;; 27b. Флаг есть, MILLISECS нет: метки не падают,
+  ;; время не накапливается.
+  (setq KG-TIMING t)
+  (KG-TimeReset)
+  (T-Ok "T27.2 без MILLISECS старт не взят" (null KG-TSTART))
+  (KG-TimeMark "шаг без времени")
+  (T-Ok "T27.3 журнал всё ещё пуст" (null KG-TLINES))
+
+  ;; 27c. Время есть: KG-NowMs подменяется возрастающей
+  ;; последовательностью 1000, 1250, 1500 мс -- дельты по 250.
+  (setq KG-T-TMS 750)
+  (defun KG-NowMs () (setq KG-T-TMS (+ KG-T-TMS 250)) KG-T-TMS)
+  (KG-TimeReset)
+  (KG-TimeMark "первый")
+  (KG-TimeMark "второй")
+  (T-EqInt "T27.4 меток в журнале две" (length KG-TLINES) 2)
+  (T-EqInt "T27.5 дельта первой метки" (cdr (car (reverse KG-TLINES))) 250)
+  (T-EqInt "T27.6 всего от старта" (- KG-TSTAMP KG-TSTART) 500)
+  (T-EqStr "T27.7 метка запомнена строкой" (car (car (reverse KG-TLINES))) "первый")
+
+  ;; 27d. KG-MarkT делает работу KG-Mark и добавляет точку замера.
+  (setq KG-LAST-STEP nil)
+  (KG-MarkT "метка-обёртка")
+  (T-EqStr "T27.8 KG-MarkT обновляет последний шаг" KG-LAST-STEP "метка-обёртка")
+  (T-EqInt "T27.9 KG-MarkT добавил точку замера" (length KG-TLINES) 3)
+  ;; отчёт печатается без ошибок; журнал не портит
+  (KG-TimeReport)
+
+  ;; Настоящую KG-NowMs возвращаем: копия реализации из RepDblock.lsp,
+  ;; дальше её могут звать прогонные пути.
+  (defun KG-NowMs ( / v)
+    (setq v (KG-Safe '(lambda () (getvar "MILLISECS")) nil))
+    (if (numberp v) (fix v) nil)
+  )
+  (setq KG-TIMING nil)
+  (setq KG-T-TMS nil)
+)
+
+;;;===========================================================================
+;;; T28. УСКОРЕНИЕ ОБХОДА И СУБ-ЗАМЕРЫ (сборка 71.5)
+;;;
+;;; Проверяется то, ради чего менялся код: пакетный поиск вставок одним
+;;; обходом (KG-DefInsertsForKeys), прямое совпадение по группе 2 без COM,
+;;; кэш записи блока по имени (KG-DefRecNamedP) и накопительные суб-замеры.
+
+(defun TEST-SpeedUp ( / )
+  (princ "\n\nT28. Ускорение обхода и суб-замеры (71.5)")
+
+  ;; 28a. KG-DefInsertsForKeys: два имени закрываются одним обходом.
+  (setq DB-ENTDB
+    (list (cons "DEF" "BDEF") (cons "BDEF" "I1") (cons "I1" "I2")
+          (cons "I2" "I3") (cons "I3" "EB")))
+  (setq DB-ENTDATA
+    (list (cons "BDEF" (list (cons 0 "BLOCK") (cons 2 "DEF")))
+          (cons "I1" (list (cons 0 "INSERT") (cons 2 "~Стойка КП50")))
+          (cons "I2" (list (cons 0 "LINE")))
+          (cons "I3" (list (cons 0 "INSERT") (cons 2 "Закладная")))
+          (cons "EB" (list (cons 0 "ENDBLK")))))
+  (defun vlax-ename->vla-object (e / ) (KG-AsString e))
+  (defun vla-get-EffectiveName (o / )
+    (KG-AsString (cdr (assoc 2 (entget (KG-AsString o))))))
+  (setq T28-MAP (KG-DefInsertsForKeys "DEF" (list "Стойка КП50" "Закладная")))
+  (T-EqInt "T28.1 пакетный поиск закрыл оба имени" (length T28-MAP) 2)
+  (T-EqStr "T28.2 первое имя -> своя вставка"
+           (KG-AsString (cdr (assoc "Стойка КП50" T28-MAP))) "I1")
+  (T-EqStr "T28.3 второе имя -> своя вставка"
+           (KG-AsString (cdr (assoc "Закладная" T28-MAP))) "I3")
+  (T-Ok "T28.4 не найденное имя в карту не попадает"
+        (not (assoc "Ригель" T28-MAP)))
+
+  ;; T23 (TEST-VisParam) оставляет свою заглушку KG-EffectiveNameOf: она
+  ;; возвращает сам объект. Здесь проверяется ветка анонимного
+  ;; представления, которая обязана читать эффективное имя COM-вызовом,
+  ;; поэтому кладём свою честную цепочку чтения.
+  (defun KG-EffectiveNameOf (obj / n)
+    (setq n (KG-Safe '(lambda () (vla-get-EffectiveName obj)) nil))
+    (KG-AsString n)
+  )
+
+  ;; 28b. Прямое совпадение по группе 2 COM не требует: EffectiveName
+  ;; отвечает пустотой, а вставка всё равно находится. Прежний код читал
+  ;; только EffectiveName и вернул бы nil.
+  (setq DB-ENTDB (list (cons "DEF2" "B2") (cons "B2" "J1") (cons "J1" "EB2")))
+  (setq DB-ENTDATA
+    (list (cons "B2" (list (cons 0 "BLOCK") (cons 2 "DEF2")))
+          (cons "J1" (list (cons 0 "INSERT") (cons 2 "~Стойка КП50")))
+          (cons "EB2" (list (cons 0 "ENDBLK")))))
+  (defun vla-get-EffectiveName (o / ) nil)
+  (T-EqStr "T28.5 прямое совпадение по группе 2 не требует COM"
+           (KG-AsString (KG-DefInsertByName "DEF2" "Стойка КП50")) "J1")
+
+  ;; 28c. Анонимное представление: в группе 2 заводское «*U88», а
+  ;; эффективное имя -- родитель. Находится через COM, как на чертеже.
+  (setq DB-ENTDB (list (cons "DEF3" "B3") (cons "B3" "K1") (cons "K1" "EB3")))
+  (setq DB-ENTDATA
+    (list (cons "B3" (list (cons 0 "BLOCK") (cons 2 "DEF3")))
+          (cons "K1" (list (cons 0 "INSERT") (cons 2 "*U88")))
+          (cons "EB3" (list (cons 0 "ENDBLK")))))
+  (defun vla-get-EffectiveName (o / )
+    (if (KG-StrEq (KG-AsString o) "K1") "Стойка КП50" ""))
+  (T-EqStr "T28.6 анонимное представление находится по эффективному имени"
+           (KG-AsString (KG-DefInsertByName "DEF3" "Стойка КП50")) "K1")
+  (T-Ok "T28.7 чужое имя анонимной вставке не подставляется"
+        (not (KG-DefInsertByName "DEF3" "Ригель")))
+
+  ;; 28d. Кэш записи блока сверяет имя: запись с чужим именем отвергается,
+  ;; иначе переименованная запись выдавалась бы за искомую.
+  (T-Ok "T28.8 запись с нужным именем принята" (KG-DefRecNamedP "B3" "DEF3"))
+  (T-Ok "T28.9 запись с чужим именем отвергнута"
+        (not (KG-DefRecNamedP "B3" "DEF4")))
+  (T-Ok "T28.10 нечитаемая запись отвергнута" (not (KG-DefRecNamedP nil "DEF3")))
+
+  ;; 28e. Суб-замеры: без флага -- тишина; с временем -- накопление
+  ;; суммы и счётчика вызовов.
+  (setq KG-TIMING nil)
+  (setq KG-SUBT nil KG-SUBN nil)
+  (KG-SubT1 "проба" (KG-SubT0))
+  (T-Ok "T28.11 без KG-TIMING суб-замеры молчат" (null KG-SUBT))
+  (setq KG-TIMING t)
+  (setq KG-SUBT nil KG-SUBN nil)
+  (setq T28-TMS 0)
+  (defun KG-NowMs () (setq T28-TMS (+ T28-TMS 100)) T28-TMS)
+  (KG-SubT1 "проба" (KG-SubT0))
+  (T-EqInt "T28.12 суб-замер накопил время"
+           (cdr (assoc "проба" KG-SUBT)) 100)
+  (KG-SubT1 "проба" (KG-SubT0))
+  (T-EqInt "T28.13 повторный вызов накопил сумму"
+           (cdr (assoc "проба" KG-SUBT)) 200)
+  (T-EqInt "T28.14 счётчик вызовов посчитан"
+           (cdr (assoc "проба" KG-SUBN)) 2)
+
+  ;; Настоящую KG-NowMs возвращаем: копия реализации из RepDblock.lsp.
+  (defun KG-NowMs ( / v)
+    (setq v (KG-Safe '(lambda () (getvar "MILLISECS")) nil))
+    (if (numberp v) (fix v) nil)
+  )
+  (setq KG-TIMING nil KG-SUBT nil KG-SUBN nil T28-MAP nil T28-TMS nil)
+)
+
+;;;===========================================================================
+;;; T29. КАРТА ВЛОЖЕНИЙ ДЛЯ ОСВОБОЖДЕНИЯ ИМЁН (сборка 71.6)
+;;;
+;;; Повод: KG-SourceOfNested на каждое из 76 имён заново обходил все
+;;; определения семейства -- суб-замер 71.5 «пре: определение-источник»
+;;; показал 5.09 с при 76 вызовах. Теперь карта «вложенное -> кто
+;;; вкладывает» строится один раз (KG-NestedPairs), а выбор определения
+;;; идёт по ней (KG-SourceOfNestedIn). Проверяется и то, что выбор НЕ
+;;; изменился: прежняя функция осталась в файле эталоном.
+
+(defun TEST-NestedPairsMap ( / P nm)
+  (princ "\n\nT29. Карта вложений и освобождение имён (71.6)")
+  (DB-SetDefs
+    (list
+      ;; мастер семейства, ничего не вкладывает
+      (DB-MakeDef "ABC1.01 стойка v1.52" nil nil)
+      ;; вариант КП1 вкладывает «Стойка», та -- «Болт» (транзитивно)
+      (DB-MakeDef "ABC1.01 стойка v1.52 КП1" (list "Стойка") nil)
+      (DB-MakeDef "Стойка" (list "Болт") nil)
+      (DB-MakeDef "Болт" nil nil)
+      ;; чужое определение тоже вкладывает «Болт»: источником быть не должно
+      (DB-MakeDef "Чужая балка" (list "Болт") nil)
+      ;; вариант с суффиксом «Болт» -- у него приоритет первого прохода
+      (DB-MakeDef "ABC1.01 стойка v1.52 Болт" (list "Болт") nil)
+    )
+  )
+  (setq P (KG-NestedPairs *DB*))
+  (T-EqInt "T29.1 карта собрала все вложения" (length P) 5)
+  (T-EqStr "T29.2 транзитивное вложение попало в карту"
+           (cdr (assoc "Болт" P))
+           "ABC1.01 стойка v1.52 КП1")
+  ;; 29a. Приоритет первого прохода: вариант семейства с суффиксом, равным
+  ;; имени вложенного, важнее любого другого определения.
+  (T-EqStr "T29.3 суффикс варианта важнее порядка определений"
+           (KG-SourceOfNestedIn P "ABC1.01 стойка" "Болт")
+           "ABC1.01 стойка v1.52 Болт")
+  ;; 29b. Без совпавшего суффикса -- первое определение семейства по
+  ;; порядку; чужое определение («Чужая балка») источником не становится.
+  (T-EqStr "T29.4 источник -- первое семейное определение по порядку"
+           (KG-SourceOfNestedIn P "ABC1.01 стойка" "Стойка")
+           "ABC1.01 стойка v1.52 КП1")
+  ;; 29c. Имя без вложений источника не имеет.
+  (T-Ok "T29.5 имя без вложений источника не имеет"
+        (not (KG-SourceOfNestedIn P "ABC1.01 стойка" "Гайка")))
+  ;; 29d. Эквивалентность прежней функции: она -- эталон выбора.
+  (foreach nm '("Стойка" "Болт")
+    (T-EqStr (strcat "T29.6 прежняя и новая функции совпали на \"" nm "\"")
+             (KG-SourceOfNestedIn P "ABC1.01 стойка" nm)
+             (KG-SourceOfNested *DB* "ABC1.01 стойка" nm))
+  )
+  (T-Ok "T29.7 на имени без источника обе функции вернули nil"
+        (equal (KG-SourceOfNestedIn P "ABC1.01 стойка" "Гайка")
+               (KG-SourceOfNested *DB* "ABC1.01 стойка" "Гайка")))
+  (setq P nil nm nil)
+)
+
+;;;===========================================================================
+;;; T30. КАРТА ССЫЛОК ДЕРЖАТЕЛЕЙ (сборка 71.7)
+;;;
+;;; Повод: KG-DefRefHolders обходила содержимое ВСЕХ определений на КАЖДУЮ
+;;; пару перепривязки: суб-замер 71.6 «держатели ссылки» показал 56.8 с на
+;;; 612 пар на одном семействе (247 с на 2737 пар на трёх), в очистке тот
+;;; же обход стоил ещё 28.1 с. Теперь карта «имя -> кто вставляет»
+;;; строится один раз на запуск шага (KG-RefMapBuild) и правится точечно
+;;; при перепривязке ссылок (KG-RefMapRewire). Проверяется совпадение с
+;;; прежним обходом (KG-RefHoldersLegacy -- эталон) и живая правка карты
+;;; без пересборки.
+
+(defun TEST-RefHoldersMap ( / nm)
+  (princ "\n\nT30. Карта ссылок держателей (71.7)")
+  ;; Заглушки чтения у предыдущих фикстур могли смениться (T22/T23
+  ;; подменяют entget): возвращаем канонические, на которых стоит T21.
+  (defun tblobjname (tbl nm) (FAKE-Chain nm))
+  (defun tblsearch (tbl nm / e)
+    (setq e (FAKE-Chain nm))
+    (if e (list (cons 0 "BLOCK") (cons 2 nm) (cons -2 e)) nil)
+  )
+  (defun entnext (e) (FAKE-Chain e))
+  (defun entget (e) (KG-CdrCI e DB-ENTDATA))
+  (defun entmod (ed / e out p done)
+    (setq e (cdr (assoc -1 ed)))
+    (setq out nil done nil)
+    (foreach p DB-ENTDATA
+      (if (and (not done) (FAKE-SameKey (car p) e))
+        (progn (setq out (cons (cons e ed) out)) (setq done t))
+        (setq out (cons p out))
+      )
+    )
+    (if done
+      (progn (setq DB-ENTDATA (reverse out)) ed)
+      nil)
+  )
+  (defun entupd (e) e)
+  (T21-SetDb)
+
+  ;; 30a. Совпадение карты с прежним обходом по всем именам, у которых есть
+  ;;      держатели. Имя в другом регистре -- тоже: KG-DefRefersTo сравнивает
+  ;;      имена без учёта регистра, и ведро обязано отвечать так же.
+  (foreach nm '("~Гайка" "~гайка" "~Болт" "~Шайба" "~Звено" "Петля"
+                "~Кольцо" "~Пружина" "~ДетальX" "~ДетальY" "~Шпонка"
+                "~Втулка" "Рычаг" "Ступица" "Шпонка" "Шайба" "Обойма"
+                "Вал" "~Вал")
+    (T-EqStr (strcat "T30.1 держатели совпали с прежним обходом на \""
+                     nm "\"")
+             (KG-JoinNames (KG-DefRefHolders nm))
+             (KG-JoinNames (KG-RefHoldersLegacy nm)))
+  )
+
+  ;; 30b. Самоссылка держателем не считается: «~Гайка» вкладывает саму себя,
+  ;;      «Ступица» -- тоже.
+  (T-Ok "T30.2 самоссылка держателем не считается"
+        (not (KG-StrInterCI (list "~Гайка") (KG-DefRefHolders "~Гайка"))))
+  (T-EqStr "T30.3 держатели «Ступицы» -- без неё самой"
+           (KG-JoinNames (KG-DefRefHolders "Ступица")) "Шпонка")
+
+  ;; 30c. Пустые ответы совпадают.
+  (T-Ok "T30.4 на имени без держателей обе функции молчат"
+        (and (not (KG-DefRefHolders "Болт"))
+             (not (KG-RefHoldersLegacy "Болт"))))
+  (T-Ok "T30.5 на пустом имени обе функции молчат"
+        (and (not (KG-DefRefHolders ""))
+             (not (KG-RefHoldersLegacy ""))))
+
+  ;; 30d. Живая правка карты: после перепривязки карта правится точечно, без
+  ;;      пересборки -- держатель уходит из ведра старого имени и приходит в
+  ;;      ведро нового.
+  (T21-SetDb)
+  (T-EqStr "T30.6 до правки держатели прежнего имени"
+           (KG-JoinNames (KG-DefRefHolders "~Гайка")) "Чертеж А, *U900")
+  (T-EqInt "T30.7 правка ссылок выполнена"
+           (KG-RewireDefRefs "Чертеж А" "~Гайка" "Гайка") 1)
+  (T-Ok "T30.8 карта поправлена точечно"
+        (KG-RefMapRewire "Чертеж А" "~Гайка" "Гайка"))
+  (T-Ok "T30.9 карта жива, пересборки не было" KG-REFREV-ON)
+  (T-EqStr "T30.10 держатель появился в ведре нового имени"
+           (KG-JoinNames (KG-DefRefHolders "Гайка")) "Чертеж А")
+  (T-EqStr "T30.11 и ушёл из ведра старого"
+           (KG-JoinNames (KG-DefRefHolders "~Гайка")) "*U900")
+  (T-EqStr "T30.12 прежний обход подтверждает"
+           (KG-JoinNames (KG-RefHoldersLegacy "~Гайка")) "*U900")
+
+  ;; 30e. Сброс карты: следующий вопрос собирает её заново по чертежу.
+  (KG-RefMapDrop)
+  (T-Ok "T30.13 карта сброшена" (not KG-REFREV-ON))
+  (T-EqStr "T30.14 пересобранная карта отвечает по текущему чертежу"
+           (KG-JoinNames (KG-DefRefHolders "~Гайка")) "*U900")
+  (T-EqStr "T30.15 и по новому имени"
+           (KG-JoinNames (KG-DefRefHolders "Гайка")) "Чертеж А")
+
+  ;; 30f. Шаг сам сбрасывает карту в начале и в конце.
+  (T21-SetDb)
+  (T-EqInt "T30.16 пара из двух ссылок перепривязана шагом"
+           (KG-Step_RewireDefs (list (list "Гайка" "~Гайка"))) 2)
+  (T-Ok "T30.17 после шага карта сброшена" (not KG-REFREV-ON))
+  (T-EqStr "T30.18 свежая карта видит новое имя"
+           (KG-JoinNames (KG-DefRefHolders "Гайка")) "Чертеж А, *U900")
+  (T-Ok "T30.19 на прежнем имени держателей не осталось"
+        (not (KG-DefRefHolders "~Гайка")))
+  (setq nm nil)
+)
+
 (defun RUN-ALL-TESTS ()
   (setq TESTS-PASSED 0)
   (setq TESTS-FAILED 0)
@@ -3762,6 +4089,11 @@
   (TEST-VisParam)
   (TEST-NestedVis)
   (TEST-FamilyFlex)
+  (TEST-Timing)
+  (TEST-SpeedUp)
+  (TEST-NestedPairsMap)
+  (TEST-RefHoldersMap)
+  (TEST-RepStrip)
   (princ "\n----------------------------------------------")
   (princ (strcat "\n Пройдено: " (itoa TESTS-PASSED)))
   (princ (strcat "\n Провалено: " (itoa TESTS-FAILED)))
@@ -4537,4 +4869,122 @@
   (defun entdel (e) (if DB-ENTDEL-FAILS nil (FAKE-Erase e)))
   (defun dictnext (d rewind / ) nil)
   (defun dictsearch (el key / ) nil)
+)
+
+;;;---------------------------------------------------------------------------
+;;; T31. Глубокое снятие метаданных динамики (сборка 71.8).
+;;;
+;;; Определения-кандидаты («~имя» и остатки) PURGE не берёт: на их запись
+;;; жёстко ссылается rep-data (340) в расширенном словаре вставки.
+;;; KG-CleanupRepStripDeep снимает деревья таких словарей.
+;;;
+;;; Подделки: entget читает «объекты» из T31-ENT (имя . список пар),
+;;; entdel/dictremove пишут в T31-DEL/T31-DICT, tblnext выдаёт строки из
+;;; T31-Q, entnext ходит по цепочке определения. Интерпретатор лишние
+;;; аргументы игнорирует, поэтому подделка entget с одним параметром
+;;; обслуживает и (entget e), и (entget e (list "*")).
+;;;
+;;; Записи сравниваются через eq (KG-RepMemEq), стражи дерева -- через
+;;; listp: живая проба probe16 на AutoCAD 2023 показала, что "=" на ename
+;;; возвращает nil даже для одной и той же сущности. В стенде имена --
+;;; строки, поэтому eq там сравнивает значения (см. autolisp.py).
+;;;---------------------------------------------------------------------------
+
+(defun T31-Entget (e / )
+  (KG-CdrCI e T31-ENT)
+)
+
+(defun TEST-RepStrip ()
+  (princ "\n\nT31. Снятие метаданных динамики")
+
+  ;; 24a. Сравнение записей списком.
+  (T-Ok "T31.1 запись найдена в списке"
+        (KG-RepMemEq "REC1" (list "A" "REC1")))
+  (T-Ok "T31.2 чужой записи нет"
+        (not (KG-RepMemEq "REC9" (list "A" "REC1"))))
+  (T-Ok "T31.3 пустой список -- nil"
+        (not (KG-RepMemEq "REC1" nil)))
+
+  ;; 24b. Ссыльщик: rep-data с 340 на запись кандидата.
+  (setq T31-ENT (list
+                  (cons "XR1" (list (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
+                                    (cons 340 "REC1")))
+                  (cons "XR2" (list (cons 0 "XRECORD")
+                                    (cons 340 "REC9")))
+                  (cons "XR3" (list (cons 0 "XRECORD")
+                                    (cons 1001 "AcDbBlockRepBTag")))))
+  (setq T31-DEL nil T31-DICT nil)
+  (defun entget (e / ) (T31-Entget e))
+  (defun entdel (e / ) (setq T31-DEL (cons e T31-DEL)) T)
+  (defun dictremove (d key / )
+    (setq T31-DICT (cons (strcat d "|" key) T31-DICT))
+    T)
+  (T-Ok "T31.4 rep-data со ссылкой на запись найден"
+        (KG-RepRefHit "XR1" (list "REC1")))
+  (T-Ok "T31.5 ссылка на чужую запись не считается"
+        (not (KG-RepRefHit "XR2" (list "REC1"))))
+  (T-Ok "T31.6 без 1005 и 340 ссылки нет"
+        (not (KG-RepRefHit "XR3" (list "REC1"))))
+
+  ;; 24c. Дерево словаря: поиск ссылки и снятие.
+  (setq T31-ENT (list
+                  (cons "XD1" (list (cons 0 "DICTIONARY")
+                                    (cons 3 "AcDbRepData")
+                                    (cons 360 "XR1")
+                                    (cons 3 "AcDbAppDataCache")
+                                    (cons 360 "XR4")))
+                  (cons "XR1" (list (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
+                                    (cons 340 "REC1")))
+                  (cons "XR4" (list (cons 0 "XRECORD")))))
+  (setq T31-DEL nil T31-DICT nil)
+  (T-Ok "T31.7 дерево со ссылкой на кандидата распознано"
+        (KG-RepTreeHas "XD1" (list "REC1") 0))
+  (T-Ok "T31.8 дерево без ссылок на кандидата пропущено"
+        (not (KG-RepTreeHas "XD1" (list "REC9") 0)))
+  (T-EqInt "T31.9 снято два объекта дерева"
+           (KG-RepTreeStrip "XD1" 0) 2)
+  (T-Ok "T31.10 оба ребёнка стёрты"
+        (and (KG-RepMemEq "XR1" T31-DEL) (KG-RepMemEq "XR4" T31-DEL)))
+  (T-Ok "T31.11 записи словаря сняты"
+        (and (KG-RepMemEq "XD1|AcDbRepData" T31-DICT)
+             (KG-RepMemEq "XD1|AcDbAppDataCache" T31-DICT)))
+
+  ;; 24d. Полный проход по определению с деревом.
+  (setq T31-Q (list (list (cons 2 "BLK1"))))
+  (setq T31-ENT (list
+                  (cons "E1" (list (cons 0 "INSERT")
+                                   (cons 5 "E1H")
+                                   (cons 360 "XD1")))
+                  (cons "ENDBLK" (list (cons 0 "ENDBLK")))
+                  (cons "T31BLK" (list (cons 0 "BLOCK")
+                                       (cons 330 "T31REC")))
+                  (cons "XD1" (list (cons 0 "DICTIONARY")
+                                    (cons 3 "AcDbRepData")
+                                    (cons 360 "XR1")
+                                    (cons 3 "AcDbAppDataCache")
+                                    (cons 360 "XR4")))
+                  (cons "XR1" (list (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
+                                    (cons 340 "REC1")))
+                  (cons "XR4" (list (cons 0 "XRECORD")))))
+  (setq T31-DEL nil T31-DICT nil)
+  (defun tblnext (t1 / r) (setq r (car T31-Q)) (setq T31-Q (cdr T31-Q)) r)
+  (defun tblobjname (t1 n / )
+    (cond ((= n "BLK1") "BLK1")
+          ((= n "T31BLK") "T31BLK")
+          (t nil)))
+  (defun entnext (e / )
+    (cond ((= e "BLK1") "E1") ((= e "E1") "ENDBLK") (t nil)))
+  (T-EqInt "T31.12 полный проход снял объекты дерева"
+           (KG-CleanupRepStripDeep (list "REC1")) 2)
+  (T-Ok "T31.13 ребёнок дерева стёрт в проходе"
+        (KG-RepMemEq "XR1" T31-DEL))
+  (T-Ok "T31.14 запись словаря снята в проходе"
+        (KG-RepMemEq "XD1|AcDbRepData" T31-DICT))
+
+  ;; 24e. Записи кандидатов по именам.
+  (T-EqStr "T31.15 запись кандидата найдена по имени"
+           (KG-AsString (car (KG-CleanupRepRecords (list "T31BLK"))))
+           "T31REC")
+  (T-Ok "T31.16 имя без определения пропущено"
+        (not (KG-CleanupRepRecords (list "НЕТУ"))))
 )

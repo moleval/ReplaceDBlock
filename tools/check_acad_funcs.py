@@ -73,7 +73,10 @@ ACAD_BUILTINS = {
     # видимости динамического блока. dictnext -- перебор записей словаря:
     # нужен разбору держателей остатка (словарные ссылки, из-за которых
     # PURGE считает определение использованным, а ENTD отказывает).
-    "DICTSEARCH", "DICTNEXT",
+    # dictremove -- удаление записи словаря (глубокое снятие
+    # метаданных динамики, сборка 71.8). Работа проверена живым
+    # прогоном probe13.
+    "DICTSEARCH", "DICTNEXT", "DICTREMOVE",
     "HANDENT", "SSGET", "SSADD", "SSDEL", "SSLENGTH", "SSNAME", "SSMEMB",
     "SETVAR", "GETVAR", "NENTSEL", "NENTSELP", "ACAD_STRLSORT",
     # Visual LISP: списки и строки

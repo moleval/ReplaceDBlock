@@ -646,6 +646,10 @@ class Interpreter:
         d("1+", lambda x: x + 1)
         d("1-", lambda x: x - 1)
         d("abs", abs)
+        # numberp -- стандартный предикат AutoLISP; в стенде его не было,
+        # а замеры времени (KG-NowMs) отличают по нему число от nil/строки.
+        d("numberp", lambda x=NIL: sym("T") if
+          (isinstance(x, (int, float)) and not isinstance(x, bool)) else NIL)
         d("max", lambda *a: max(a))
         d("min", lambda *a: min(a))
         d("fix", lambda x: int(x))
@@ -667,6 +671,12 @@ class Interpreter:
         d("=", lambda a, b: sym("T") if lisp_equal(a, b) else NIL)
         d("/=", lambda a, b: NIL if lisp_equal(a, b) else sym("T"))
         d("equal", lambda a, b, *r: sym("T") if lisp_equal(a, b) else NIL)
+        # eq -- стандартная функция AutoLISP. В AutoCAD сравнивает по
+        # «сущности»: только eq годится для имён из entget -- "=" на
+        # ename возвращает nil (живая проба probe16, сборка 71.8).
+        # В стенде роль сущностей играют строки, поэтому здесь eq
+        # сравнивает значения тем же lisp_equal.
+        d("eq", lambda a, b: sym("T") if lisp_equal(a, b) else NIL)
         # Сравнение чисел. В AutoCAD сравнение со строкой не «молча
         # сравнивает как Python», а падает: (< "1.5" "1.1") ->
         # "неверный тип аргумента: fixnump: 1.5". Именно так на реальном
@@ -698,6 +708,9 @@ class Interpreter:
         d("assoc", _assoc)
         d("member", _member)
         d("vl-consp", lambda v: sym("T") if (isinstance(v, Dotted) or (is_list(v) and v)) else NIL)
+        # listp -- стандартный предикат AutoLISP; в AutoCAD (listp nil) -- T.
+        d("listp", lambda v=NIL: sym("T") if
+          (v is None or is_list(v) or isinstance(v, Dotted)) else NIL)
         d("vl-list-length", lambda v: len(to_pylist(v)[0]))
         d("vl-position", _vl_position)
         d("vl-remove", lambda x, lst: [e for e in to_pylist(lst)[0] if not lisp_equal(e, x)])
