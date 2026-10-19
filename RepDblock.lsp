@@ -166,6 +166,16 @@
 ;; (KG-RefMapDrop): между шагами чертёж меняют другие шаги.
 ;; KG-REFREV-ON -- признак «карта построена и верна»: по нему KG-RefMapEnsure
 ;; отличает пустую карту от несобранной.
+;;
+;; 72. Две сборки карты на крупном чертеже (366 с прогон) стоили 120 с --
+;; почти треть. Причина не в обходе определений, а в KG-RefMapSet: на КАЖДОЕ
+;; ребро он заново пересобирал весь список через KG-StrEq, то есть strcase на
+;; каждое сравнение. Теперь сборка и правки идут точными сравнениями
+;; (assoc/member/subst -- ключи приходят из чертежа в каноническом виде), а
+;; сравнение без учёта регистра -- только запасной путь (KG-RMCdr, KG-RMSet).
+;; Замер на 4000 рёбер и 400 имён: 11.2 с -> 0.5 с; KG-EXRefHolders
+;; (1239 вставок, 250 имён): 2.0 с -> 0.06 с. Живой прогон подтвердил:
+;; 366.5 с -> 251.4 с, сборка карты 120 с -> 14.75 с.
 (if (not (boundp 'KG-REFREV)) (setq KG-REFREV nil))
 (if (not (boundp 'KG-REFREV-ON)) (setq KG-REFREV-ON nil))
 ;; Пары «старое имя -> служебное», которые ещё не перепривязаны:
@@ -197,7 +207,25 @@
 ;; прогона очистки; снимаются в KG-PurgeAnchorsDrop, в том числе по ошибке.
 (if (not (boundp 'KG-PURGE-ANCHORS)) (setq KG-PURGE-ANCHORS nil))
 
-(setq KG-VERSION "71.8")
+;; 71.9: читать ли через COM состояния вложенных блоков внутри определений.
+;; t (по умолчанию) -- читать как раньше. nil -- не читать вовсе: аварийный
+;; обход для чертежа, на котором COM-чтение вложенных состояний роняет
+;; AutoCAD (0xC0000005). Видно в отчёте RDBERR.
+(if (not (boundp 'KG-NESTED-COM)) (setq KG-NESTED-COM t))
+
+;; 71.9: кэш «имя определения -> уже прочитанные состояния вложенных
+;; вставок». Один и тот же *U-экземпляр сканируется повторно на каждое своё
+;; вхождение, а именно повторные COM-обходы уронили крупный чертёж. Живёт
+;; одно чтение модели (сбрасывается в KG_DBGetModel) плюс начало прогона
+;; (KG-SaveVars).
+(if (not (boundp 'KG-SCAN-CACHE)) (setq KG-SCAN-CACHE nil))
+
+;; 71.9: журнал незавершённой команды. KG-JOURNAL-MINE = t -- журнал ведёт
+;; ЭТА команда; nil -- в файле лежит улика прошлого падения, и KG-JournalErase
+;; её не трогает. Подробности -- у KG-JournalWrite.
+(if (not (boundp 'KG-JOURNAL-MINE)) (setq KG-JOURNAL-MINE nil))
+
+(setq KG-VERSION "72")
 
 (vl-load-com)
 
@@ -611,6 +639,69 @@
       )
     )
   )
+)
+
+;;;--- Журнал незавершённой команды (сборка 71.9) -----------------------------
+;;
+;; Жёсткое падение AutoCAD (0xC0000005) не ловится vl-catch-all-apply и не
+;; вызывает *error*: команда обрывается, системные переменные остаются
+;; изменёнными, а временные вложения защиты от PURGE -- в чертеже. Поэтому
+;; перед работой на диск кладётся журнал, а следующая команда находит его и
+;; доводит возврат до конца (KG-CrashRecover, команда RDBRECOVER).
+;;
+;; Здесь -- чистая часть: сборка и разбор строк журнала. Формат: одна
+;; запись -- одна строка, поля разделены "|". Разделитель безопасен: символ
+;; "|" запрещён в именах блоков AutoCAD, а значения системных переменных
+;; целые. Проверяется тестами T32.
+(defun KG-JournalEncode (kg-fields / kg-out kg-x)
+  (setq kg-out "")
+  (foreach kg-x kg-fields
+    (setq kg-out (strcat kg-out (if (= kg-out "") "" "|")
+                         (KG-AsString kg-x)))
+  )
+  kg-out
+)
+
+(defun KG-JournalSplit (kg-s / kg-out kg-b kg-i kg-n kg-ch)
+  (setq kg-s (KG-AsString kg-s))
+  (setq kg-out nil)
+  (setq kg-b "")
+  (setq kg-i 1)
+  (setq kg-n (strlen kg-s))
+  (while (<= kg-i kg-n)
+    (setq kg-ch (substr kg-s kg-i 1))
+    (if (= kg-ch "|")
+      (progn
+        (setq kg-out (cons kg-b kg-out))
+        (setq kg-b "")
+      )
+      (setq kg-b (strcat kg-b kg-ch))
+    )
+    (setq kg-i (1+ kg-i))
+  )
+  (reverse (cons kg-b kg-out))
+)
+
+;; Строки файла -> записи (список списков полей). Пустые строки пропускаются.
+(defun KG-JournalParse (kg-lines / kg-out kg-x)
+  (setq kg-out nil)
+  (foreach kg-x kg-lines
+    (if (and kg-x (/= (KG-AsString kg-x) ""))
+      (setq kg-out (cons (KG-JournalSplit kg-x) kg-out))
+    )
+  )
+  (reverse kg-out)
+)
+
+;; Записи с указанным ключом (первое поле).
+(defun KG-JournalRecs (kg-key kg-recs / kg-out kg-r)
+  (setq kg-out nil)
+  (foreach kg-r kg-recs
+    (if (and kg-r (car kg-r) (KG-StrEq (car kg-r) kg-key))
+      (setq kg-out (cons kg-r kg-out))
+    )
+  )
+  (reverse kg-out)
 )
 
 ;;; Логическое значение, пришедшее из COM.
@@ -2091,7 +2182,12 @@
 ;; в ведре kg-key. Новые держатели добавляются в КОНЕЦ: порядок совпадает
 ;; с порядком KG_EXAllDefNames -- как у прежнего обхода.
 (defun KG-RefMapSet (kg-key kg-who kg-on kg-map / kg-p kg-val kg-hold kg-e)
-  (setq kg-p (KG-AssocCI kg-key kg-map))
+  ;; 72. Точный поиск ведра -- первым: ключи приходят из чертежа
+  ;; (возвращаются обоими каналами: KG-RMCdr), и совпадение написания --
+  ;; правило, а не исключение. KG-AssocCI со strcase на каждую запись
+  ;; остался запасным путём для запросов «в другом регистре».
+  (setq kg-p (assoc (KG-AsString kg-key) kg-map))
+  (if (not kg-p) (setq kg-p (KG-AssocCI kg-key kg-map)))
   (setq kg-val (if kg-p (cdr kg-p) nil))
   (if kg-on
     (if (not (member kg-who kg-val))
@@ -2111,11 +2207,35 @@
   ;; «KPS 741» и «kps 741» -- одно написание, попадать они обязаны в одно
   ;; ведро. Ключ существующего ведра не переписывается: он взят из чертежа.
   (setq kg-hold (if kg-p (car kg-p) (KG-AsString kg-key)))
-  (KG-SetAssoc kg-hold kg-val kg-map)
+  ;; 72. Точечная замена ведра: subst трогает только найденную пару, и
+  ;; весь список заново не пересобирается (это и было основное время).
+  (if kg-p
+    (subst (cons kg-hold kg-val) kg-p kg-map)
+    (cons (cons kg-hold kg-val) kg-map)
+  )
+)
+
+;; 72. Быстрый поиск в карте «кто вставляет» (KG-EXRefHolders, KG-RefMapBuild).
+;; Точное сравнение -- основное, без учёта регистра -- запасное. Возвращается
+;; сам cdr, как у KG-CdrCI.
+(defun KG-RMCdr (key alst / p)
+  (setq p (assoc (KG-AsString key) alst))
+  (if p (cdr p) (KG-CdrCI key alst))
+)
+
+;; 72. Быстрая запись ведра в ту же карту: точное сравнение, subst вместо
+;; полной пересборки, запись на месте (длина карты не растёт).
+(defun KG-RMSet (key val alst / p)
+  (setq p (assoc (KG-AsString key) alst))
+  (if (not p) (setq p (KG-AssocCI key alst)))
+  (if p
+    (subst (cons (car p) val) p alst)
+    (cons (cons (KG-AsString key) val) alst)
+  )
 )
 
 ;; Построение карты одним проходом по всем определениям чертежа.
-(defun KG-RefMapBuild ( / kg-t0 kg-nm kg-x)
+(defun KG-RefMapBuild ( / kg-t0 kg-nm kg-x kg-val)
   (setq kg-t0 (KG-SubT0))
   (setq KG-REFREV nil)
   (foreach kg-nm (KG-Safe '(lambda () (KG_EXAllDefNames)) nil)
@@ -2124,7 +2244,16 @@
         ;; Вставка определения самого в себя -- петля, держателем оно не
         ;; становится. То же исключение делает и KG-DefRefersTo.
         (if (not (KG-StrEq kg-nm kg-x))
-          (setq KG-REFREV (KG-RefMapSet kg-x kg-nm t KG-REFREV))
+          ;; 72. Ведро берётся точным поиском, держатель добавляется в
+          ;; конец (порядок KG_EXAllDefNames) -- как у прежнего обхода.
+          (progn
+            (setq kg-val (KG-RMCdr kg-x KG-REFREV))
+            (if (not (member (KG-AsString kg-nm) kg-val))
+              (setq KG-REFREV
+                (KG-RMSet kg-x (append kg-val (list (KG-AsString kg-nm)))
+                          KG-REFREV))
+            )
+          )
         )
       )
     )
@@ -2190,8 +2319,11 @@
 ;; списке, а не обход чертежа.
 (defun KG-DefRefHolders (tgt / pr)
   (KG-RefMapEnsure)
-  (setq pr (KG-CdrCI (KG-AsString tgt) KG-REFREV))
-  pr
+  ;; 72. Сначала точное написание (ведра собраны из имён чертежа), и
+  ;; лишь затем поиск без учёта регистра.
+  (setq pr (assoc (KG-AsString tgt) KG-REFREV))
+  (if (not pr) (setq pr (KG-AssocCI (KG-AsString tgt) KG-REFREV)))
+  (if pr (cdr pr) nil)
 )
 
 ;; Прежний обход -- эталон для T30: заново сканирует содержимое ВСЕХ
@@ -2411,7 +2543,7 @@
 ;; служебное имя, которое само станет прежним только на следующем. Круг
 ;; прерывается, когда за проход не исправлено ни одной вставки, -- иначе две
 ;; пары, ссылающиеся друг на друга, крутились бы вечно.
-(defun KG-Step_RewireDefs (renames / todo r done total n pairs guard kg-t0)
+(defun KG-Step_RewireDefs (renames / todo r done total n pairs guard stuck kg-t0)
   ;; 71.7: карта держателей -- одна на запуск шага. Между запусками чертёж
   ;; меняют другие шаги (снятие старых определений, очистка), поэтому сброс
   ;; в начале и конце обязателен: внутри шага карта верна всегда -- каждая
@@ -2443,6 +2575,14 @@
     )
     (setq todo (reverse todo))
     (setq total (+ total done))
+    ;; 71.9. Ранний выход, обещанный комментарием в начале шага: круг
+    ;; прерывается, когда за проход не исправлено ни одной вставки. Прежде
+    ;; условием выхода были только «12 проходов»: на живом прогоне 71.8
+    ;; из 2737 пар больше 2000 приходились на такие пустые повторы -- пары,
+    ;; которым возвращать нечего, прокручивались все 12 раз, и каждый
+    ;; повтор заново искал держателей.
+    (setq stuck (length todo))
+    (if (or (null todo) (< done 1)) (setq todo nil))
     (setq guard (1+ guard))
   )
   ;; Остаток в списке -- это пары, которые за 12 проходов так ничего и не
@@ -2455,9 +2595,9 @@
   (if KG-REWSKIP
     (princ (strcat "\nОставлены как есть, иначе определение замкнулось бы: "
                    (KG-JoinNames (reverse KG-REWSKIP)))))
-  (if todo
+  (if (> (KG-AsNum stuck 0) 0)
     (KG-TraceDetail (strcat "пар без найденных ссылок: "
-                            (KG-NumStr (length todo)))))
+                            (KG-NumStr stuck))))
   ;; Карта нужна только внутри шага: дальше чертёж меняют другие шаги.
   (KG-RefMapDrop)
   (setq KG-REWPAIRS nil)
@@ -3189,9 +3329,9 @@
                     ;; определение свободным и снять его.
                     (if (/= tgt "")
                       (setq out
-                        (KG-SetAssoc tgt
+                        (KG-RMSet tgt
                           (cons (if defnm defnm "неизвестно")
-                                (KG-CdrCI tgt out))
+                                (KG-RMCdr tgt out))
                           out))
                     )
                     ;; Скрытые ссылки экземпляра: представление (*U)
@@ -3203,9 +3343,9 @@
                     (foreach hx (KG-Call 'KG-HiddenRefNames (list ed) nil)
                       (if (/= (KG-AsString hx) "")
                         (setq out
-                          (KG-SetAssoc (KG-AsString hx)
+                          (KG-RMSet (KG-AsString hx)
                             (cons (if defnm defnm "неизвестно")
-                                  (KG-CdrCI (KG-AsString hx) out))
+                                  (KG-RMCdr (KG-AsString hx) out))
                             out))
                       )
                     )
@@ -4295,7 +4435,7 @@
                                        out cnt nospace pr inst v pn pstate
                                        phit pwarn doone dynrestored dynread
                                        nvread notfound noanon retry pv r
-                                       nfromu nfromdef src nv)
+                                       nfromu nfromdef src nv kg-t0)
   (setq base (cdr (assoc "family" plan)))
   (setq newiter (cdr (assoc "newiter" plan)))
   (setq restored 0 missing 0 warns nil out nil cnt 0 nospace 0
@@ -4319,9 +4459,15 @@
     )
     (setq v (nth 2 (cdr pr)))
     (setq tgt (KG-MakeName base newiter v))
+    ;; 72. Фазы замены -- под суб-замер: на крупном чертеже шаг стоил
+    ;; 86 с на три экземпляра, и не видно, что из него дороже.
+    (setq kg-t0 (KG-SubT0))
     (setq plan-vis (KG-PlanNestedVisibility model inst tgt))
+    (KG-SubT1 "замена: план видимости" kg-t0)
     (setq old (KG-CdrCI "handle" inst))
+    (setq kg-t0 (KG-SubT0))
     (setq nh (if doone (KG_EXCreateInstance tgt inst) nil))
+    (KG-SubT1 "замена: создание экземпляра" kg-t0)
     (if (and doone nh)
       (progn
         ;; Свойства самого блока (его собственный параметр видимости)
@@ -4338,12 +4484,14 @@
         ;; Два счётчика вместо одного: по одному нулю нельзя отличить
         ;; «у старых экземпляров нечего было читать» от «прочитали, но
         ;; записать в новый экземпляр не удалось».
+        (setq kg-t0 (KG-SubT0))
         (setq dynread
           (+ dynread (length (KG-CdrCI "dyn-props" inst))))
         (setq dynrestored
           (+ dynrestored
              (KG-AsNum
                (KG_EXRestoreDynProps nh (KG-CdrCI "dyn-props" inst)) 0)))
+        (KG-SubT1 "замена: динамические свойства" kg-t0)
         ;; Прибавляется ЧИСЛО СОСТОЯНИЙ, а не единица за экземпляр:
         ;; источник («*U» или «ОПРЕДЕЛЕНИЕ») один на экземпляр, а
         ;; состояний у него может быть несколько. В сборке 39 отчёт
@@ -4359,6 +4507,7 @@
         ;; одного вложенного блока пересоздаёт анонимное представление
         ;; экземпляра, и следующая вставка ищется уже в новом. Такие пары
         ;; уходят во второй проход.
+        (setq kg-t0 (KG-SubT0))
         (setq retry nil)
         (foreach pv plan-vis
           (setq pn (car pv))
@@ -4429,7 +4578,10 @@
                              "\" не перенесено.")
                      warns))))
         )
+        (KG-SubT1 "замена: вложенная видимость" kg-t0)
+        (setq kg-t0 (KG-SubT0))
         (KG_EXDeleteInstance old)
+        (KG-SubT1 "замена: удаление старого" kg-t0)
         (setq cnt (1+ cnt))
         (setq out (cons nh out))
       )
@@ -4735,7 +4887,7 @@
                                                 pastesnap arriveddefs stale
                                                 masterfreed handlesnap
                                                 eff a rewired visrest
-                                                retired keepn grp kg-t0)
+                                                retired keepn grp kg-t0 mdl2)
   (setq errs nil)
   (setq warns nil)
   (setq mastername (KG-MakeName base newiter ""))
@@ -4820,6 +4972,10 @@
       (setq masterfreed
         (KG-Safe '(lambda () (KG-FreeMasterName mastername newiter)) nil))
       (setq KG-MASTER-FREED masterfreed)
+      ;; 71.9: переименование мастер-версии -- тоже часть состояния,
+      ;; которое обязано пережить жёсткое падение. Под стендом журнала нет:
+      ;; KG-JournalWrite определён только в разделе 8.
+      (if (not KG-TESTING) (KG-JournalWrite))
       (if (not (KG_EXPasteAtOrigin))
         (setq errs (cons "Не удалось вставить содержимое буфера обмена." errs))
       )
@@ -5029,7 +5185,10 @@
       ;; 8. перепривязка вложенных вхождений внутри сторонних определений
       (KG-MarkT "перепривязка вложенных вхождений")
       (setq kg-t0 (KG-SubT0))
-      (KG-Step_RewireNested (KG-Safe '(lambda () (KG_DBGetModel)) nil) renames)
+      (setq mdl2 (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (KG-SubT1 "семья: чтение модели (вложенные)" kg-t0)
+      (setq kg-t0 (KG-SubT0))
+      (KG-Step_RewireNested mdl2 renames)
       (KG-SubT1 "семья: перепривязка вложенных (работа)" kg-t0)
       ;; 8б. перепривязка ссылок внутри определений на прежние имена.
       ;; Идёт ДО очистки: освобождённые здесь служебные определения «~ИМЯ»
@@ -5051,10 +5210,13 @@
       ;; «обновление» определения при нуле вставок не видно.
       (KG-MarkT "снятие старых определений семейства")
       (setq kg-t0 (KG-SubT0))
+      (setq mdl2 (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (KG-SubT1 "семья: чтение модели (старые)" kg-t0)
+      (setq kg-t0 (KG-SubT0))
       (setq retired
         (KG-Safe '(lambda ()
                     (KG-Step_RetireOldDefs
-                      (KG_DBGetModel) base newiter mastername arriveddefs))
+                      mdl2 base newiter mastername arriveddefs))
                  (cons nil nil)))
       (KG-SubT1 "семья: снятие старых (работа)" kg-t0)
       ;; 9. технический экземпляр и старые определения
@@ -5064,7 +5226,10 @@
       (KG-SubT1 "семья: удаление тех.экземпляра (работа)" kg-t0)
       ;; 10. контроль
       (KG-MarkT "контроль результата")
-      (setq val (KG-ValidateIntegration (KG-Safe '(lambda () (KG_DBGetModel)) nil) base newiter
+      (setq kg-t0 (KG-SubT0))
+      (setq mdl2 (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (KG-SubT1 "семья: чтение модели (контроль)" kg-t0)
+      (setq val (KG-ValidateIntegration mdl2 base newiter
                    (cdr (assoc "groups" (cdr (assoc "scan" plan))))))
       ;; 71.3: что очистка обязана сохранить -- мастер-версию и определения
       ;; всех вариантов этой семьи (в том числе созданные без вставок).
@@ -6262,6 +6427,10 @@
 ;;;--- Адаптер чтения: построение модели чертежа -----------------------------
 
 (defun KG_DBGetModel ( / defs insts lays blk e defs-l insts-l nm d err)
+  ;; 71.9: кэш состояний вложенных вставок живёт одно чтение модели: между
+  ;; чтениями чертёж меняют (подмена определений, перепривязка), и старый
+  ;; ответ был бы про прежнее содержимое.
+  (setq KG-SCAN-CACHE nil)
   (KG-TraceDetail "чтение таблицы блоков")
   (setq defs-l nil)
   ;; список пропущенных сбрасывается на каждый прогон: иначе имена
@@ -6469,35 +6638,66 @@
 ;; Состояния видимости вложенных вставок внутри определения. Обход только
 ;; через entget: COM-обход содержимого определений на реальном чертеже
 ;; дал 0xC0000005.
-(defun KG_ScanDefInsertStates (defname / e ed sub nm v out cnt)
+;;
+;; 71.9. Три защиты от того же падения:
+;;   * результат кэшируется по имени определения (KG-SCAN-CACHE): на крупном
+;;     чертеже сотни экземпляров указывают на одно представление *U, и
+;;     каждый сканировал его заново -- падение случилось на четвёртом скане
+;;     одного и того же *U277. Запись кэша -- пара (имя . состояния);
+;;     отсутствие пары означает «ещё не сканировали», а пустой ответ тоже
+;;     запоминается: «вложенных состояний нет» -- это тоже ответ, и повторно
+;;     в определение не лезем;
+;;   * вложенные вставки со служебным именем "~..." пропускаются без
+;;     COM-чтения: их состояния никому не нужны, а именно на такой вставке
+;;     («~Резина ригельная ТПУ-6001») чтение свойств и упало;
+;;   * KG-NESTED-COM = nil полностью отключает COM-чтение (аварийный обход
+;;     для проблемного чертежа).
+(defun KG_ScanDefInsertStates (defname / e ed sub nm v out cnt key hit)
   (setq out nil cnt 0)
-  ;; через KG-DefEnt: tblobjname на сиротских *U отвечает nil
-  (setq e (KG-Safe '(lambda () (KG-DefEnt defname)) nil))
-  (if e
-    (while (and (setq e (KG-Safe '(lambda () (entnext e)) nil))
-                (setq ed (KG-Call 'entget (list e) nil))
-                (/= (KG-AsString (cdr (assoc 0 ed))) "ENDBLK"))
-      (if (KG-StrEq (KG-AsString (cdr (assoc 0 ed))) "INSERT")
-        (progn
-          (setq cnt (1+ cnt))
-          (KG-TraceDetail (strcat "вложенная вставка \""
-                                  (KG-AsString (cdr (assoc 2 ed))) "\""))
-          (setq sub (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
-          (if sub
+  (setq key (KG-AsString defname))
+  (setq hit (KG-AssocCI key KG-SCAN-CACHE))
+  (cond
+    ((or (not (boundp 'KG-NESTED-COM)) (not KG-NESTED-COM)) nil)
+    (hit (cdr hit))
+    (t
+      ;; через KG-DefEnt: tblobjname на сиротских *U отвечает nil
+      (setq e (KG-Safe '(lambda () (KG-DefEnt defname)) nil))
+      (if e
+        (while (and (setq e (KG-Safe '(lambda () (entnext e)) nil))
+                    (setq ed (KG-Call 'entget (list e) nil))
+                    (/= (KG-AsString (cdr (assoc 0 ed))) "ENDBLK"))
+          (if (KG-StrEq (KG-AsString (cdr (assoc 0 ed))) "INSERT")
             (progn
-              (setq nm (KG-Safe '(lambda () (KG-EffectiveNameOf sub)) nil))
-              (setq v (KG-Safe '(lambda () (KG-GetVisibilityState sub)) nil))
-              (if (and nm v) (setq out (cons (cons nm v) out)))
+              (setq cnt (1+ cnt))
+              (if (KG-IsTempDefName (KG-AsString (cdr (assoc 2 ed))))
+                (KG-TraceDetail (strcat "вложенная вставка \""
+                                        (KG-AsString (cdr (assoc 2 ed)))
+                                        "\" -- служебная, пропуск"))
+                (progn
+                  (KG-TraceDetail (strcat "вложенная вставка \""
+                                          (KG-AsString (cdr (assoc 2 ed))) "\""))
+                  (setq sub (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
+                  (if sub
+                    (progn
+                      (setq nm (KG-Safe '(lambda () (KG-EffectiveNameOf sub)) nil))
+                      (setq v (KG-Safe '(lambda () (KG-GetVisibilityState sub)) nil))
+                      (if (and nm v) (setq out (cons (cons nm v) out)))
+                    )
+                  )
+                )
+              )
             )
           )
         )
       )
+      (setq out (reverse out))
+      (KG-TraceDetail (strcat "в определении \"" key
+                       "\" вложенных вставок: " (itoa cnt)
+                       ", состояний прочитано: " (itoa (length out))))
+      (setq KG-SCAN-CACHE (cons (cons key out) KG-SCAN-CACHE))
+      out
     )
   )
-  (KG-TraceDetail (strcat "в определении \"" (KG-AsString defname)
-                   "\" вложенных вставок: " (itoa cnt)
-                   ", состояний прочитано: " (itoa (length out))))
-  (reverse out)
 )
 
 ;;;--- Адаптер исполнения ----------------------------------------------------
@@ -6637,6 +6837,8 @@
         (princ (strcat "\nЗащита от PURGE: якорных вложений "
                        (itoa (length KG-PURGE-ANCHORS))))
       )
+      ;; 71.9: якоря -- часть состояния, которое обязано пережить падение.
+      (KG-JournalWrite)
     )
   )
 )
@@ -7585,7 +7787,9 @@
     )
   )
   (KG-PurgeAnchorsDrop)
-  (length left)
+  ;; 71.9: возвращается и остаток сиротских *U: без него «ИТОГ ОЧИСТКИ»
+  ;; печатал «чисто», пока в чертеже висели десятки *U.
+  (list (length left) (length orph))
     )
   )
 )
@@ -7593,15 +7797,34 @@
 ;;;--- RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА) ---------------------------------
 (defun C:RDBCLEANUP ( / r)
   (vl-load-com)
+  ;; 71.9: сначала -- возврат по журналу прошлого падения (если он есть):
+  ;; переменные, имя мастера и временные вложения защиты от PURGE.
+  (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   ;; 71.3: якоря защиты от прошлого прогона, если он падал посреди PURGE
   (KG-Safe '(lambda () (KG-PurgeAnchorsDrop)) nil)
   (KG-TimeReset)
   (setq r (KG-CleanupRun))
+  ;; 71.9: очистка завершилась -- журнал этой команды больше не нужен.
+  (KG-JournalErase)
   (KG-TimeReport)
   (princ)
 )
 (defun C:INTCLEANUP () (C:RDBCLEANUP))
 (defun C:ПДБОЧИСТКА () (C:RDBCLEANUP))
+
+;;;--- RDBRECOVER (INTRECOVER, ПДБВОССТАНОВЛЕНИЕ): возврат после падения ------
+;;; Доводит до конца то, что не успел обработчик ошибок: системные
+;;; переменные, имя мастер-версии и временные вложения защиты от PURGE.
+;;; Обычно это делает сама следующая команда (RDB, RDBPICK, RDBCHECK,
+;;; RDBCLEANUP) -- команда нужна, когда чертёж уже открыт заново.
+(defun C:RDBRECOVER ( / )
+  (vl-load-com)
+  (KG-CrashRecover)
+  (princ "\nRDBRECOVER: восстановление завершено.")
+  (princ)
+)
+(defun C:INTRECOVER () (C:RDBRECOVER))
+(defun C:ПДБВОССТАНОВЛЕНИЕ () (C:RDBRECOVER))
 
 ;;;--- RDBCOUNT (INTCOUNT, ПДБСЧЁТ) -----------------------------------------
 ;;; Контрольный снимок таблицы блоков: сколько у каждого определения
@@ -7747,6 +7970,9 @@
   (princ (strcat "\nKG-AUTOCLEAN = " (if KG-AUTOCLEAN "t" "nil")))
   (princ (strcat "\nKG-CLEANUP-ERASE-U = "
                  (if KG-CLEANUP-ERASE-U "t" "nil")))
+  (princ (strcat "\nKG-NESTED-COM = "
+                 (if KG-NESTED-COM "t" "nil")
+                 " (nil -- не читать состояния вложенных блоков)"))
   (if KG-MASTER-FREED
     (princ (strcat "\nОсталось временно переименованное определение: \""
                    (KG-AsString (car KG-MASTER-FREED)) "\" -> \""
@@ -7810,7 +8036,228 @@
       )
     )
   )
+  ;; 71.9: команда дошла до конца или её поймал *error* -- возврат
+  ;; выполнен, журнал незавершённой команды больше не нужен.
+  (KG-Safe '(lambda () (KG-JournalErase)) nil)
   (setq KG-LAST-STEP nil)
+  (princ)
+)
+
+;;;--- Журнал незавершённой команды: файловая часть (сборка 71.9) -------------
+;; Чистая часть -- KG-JournalEncode/Split/Parse/Recs -- в разделе 1.
+
+;; Путь журнала: рядом с чертежом, имя включает имя файла чертежа. Пустой
+;; DWGPREFIX (чертёж без имени) -- журнал не ведётся: писать некуда.
+(defun KG-JournalPath ( / pre nm)
+  (setq pre (KG-AsString (KG-Safe '(lambda () (getvar "DWGPREFIX")) "")))
+  (setq nm (KG-AsString (KG-Safe '(lambda () (getvar "DWGNAME")) "")))
+  (if (or (= pre "") (= nm ""))
+    nil
+    (strcat pre "RepDblock_journal_" nm ".txt")
+  )
+)
+
+;; Признак чертежа для журнала: полный путь в верхнем регистре.
+(defun KG-JournalDwgId ( / pre nm)
+  (setq pre (KG-AsString (KG-Safe '(lambda () (getvar "DWGPREFIX")) "")))
+  (setq nm (KG-AsString (KG-Safe '(lambda () (getvar "DWGNAME")) "")))
+  (strcase (strcat pre nm))
+)
+
+;; Handle вложения-якоря: восстанавливать по handle, а не по ename --
+;; handle переживает сохранение файла, ename нет.
+(defun KG-JournalAnchorHandle (e / h)
+  (setq h (KG-Safe '(lambda () (cdr (assoc 5 (entget e)))) nil))
+  (KG-AsString h)
+)
+
+;; Строки журнала по текущему состоянию: версия, чертёж, сохранённые
+;; переменные, переименованная мастер-версия (если есть), якоря (если есть).
+(defun KG-JournalLines ( / out rec)
+  (setq out nil)
+  (setq out (cons (KG-JournalEncode (list "RepDblockJournal" "1")) out))
+  (setq out (cons (KG-JournalEncode (list "VER" KG-VERSION)) out))
+  (setq out (cons (KG-JournalEncode (list "DWG" (KG-JournalDwgId))) out))
+  (foreach rec KG-SAVED-VARS
+    (setq out (cons (KG-JournalEncode
+                      (list "VARS" (KG-AsString (car rec))
+                            (KG-AsString (cdr rec))))
+                    out))
+  )
+  (if KG-MASTER-FREED
+    (setq out (cons (KG-JournalEncode
+                      (list "MASTER" (KG-AsString (car KG-MASTER-FREED))
+                            (KG-AsString (cdr KG-MASTER-FREED))))
+                    out))
+  )
+  (foreach rec KG-PURGE-ANCHORS
+    (setq out (cons (KG-JournalEncode
+                      (list "ANCHOR" (KG-AsString (car rec))
+                            (KG-JournalAnchorHandle (cdr rec))))
+                    out))
+  )
+  (reverse out)
+)
+
+;; Записать журнал по текущему состоянию. Доступность файла -- не гарантия
+;; (папка только для чтения), поэтому неудача -- только предупреждение.
+(defun KG-JournalWrite ( / path fh line)
+  (setq path (KG-JournalPath))
+  (if path
+    (progn
+      (setq fh (KG-Safe '(lambda () (open path "w")) nil))
+      (if fh
+        (progn
+          (foreach line (KG-JournalLines)
+            (KG-Safe '(lambda () (write-line line fh)) nil)
+          )
+          (KG-Safe '(lambda () (close fh)) nil)
+          (setq KG-JOURNAL-MINE t)
+        )
+        (princ (strcat "\nВНИМАНИЕ: журнал восстановления записать "
+                       "не удалось (файл недоступен)."))
+      )
+    )
+  )
+)
+
+;; Прочитать журнал: записи или nil. Файла нет или он не наш -- nil.
+(defun KG-JournalRead (path / fh line lines recs)
+  (setq lines nil)
+  (setq fh (KG-Safe '(lambda () (open path "r")) nil))
+  (if fh
+    (progn
+      (while (setq line (KG-Safe '(lambda () (read-line fh)) nil))
+        (setq lines (cons line lines))
+      )
+      (KG-Safe '(lambda () (close fh)) nil)
+      (setq recs (KG-JournalParse (reverse lines)))
+      (if (KG-JournalRecs "RepDblockJournal" recs) recs nil)
+    )
+    nil
+  )
+)
+
+;; Удалить СВОЙ журнал (KG-JOURNAL-MINE): чужой -- это улика падения.
+(defun KG-JournalErase ( / path)
+  (if (and KG-JOURNAL-MINE (setq path (KG-JournalPath)))
+    (progn
+      (KG-Safe '(lambda () (vl-file-delete path)) nil)
+      (setq KG-JOURNAL-MINE nil)
+    )
+  )
+)
+
+;; Найти журнал незавершённой команды и довести возврат до конца.
+;; Вызывается в начале команд ДО KG-SaveVars: та перезапишет журнал своим.
+(defun KG-CrashRecover ( / path recs id vars master anchors rc nm h e g2 n)
+  (setq n 0)
+  (setq path (KG-JournalPath))
+  (if path
+    (progn
+      (setq recs (KG-JournalRead path))
+      (if recs
+        (progn
+          (setq id (KG-AsString (nth 1 (car (KG-JournalRecs "DWG" recs)))))
+          (princ "\n=== ЖУРНАЛ НЕЗАВЕРШЁННОЙ КОМАНДЫ ===")
+          (if (KG-StrEq id (KG-JournalDwgId))
+            (progn
+              ;; 1. системные переменные
+              (setq vars (KG-JournalRecs "VARS" recs))
+              (foreach rc vars
+                (if (nth 1 rc)
+                  (KG-Safe '(lambda () (setvar (nth 1 rc)
+                                               (atoi (KG-AsString (nth 2 rc)))))
+                           nil)
+                )
+              )
+              (if vars
+                (progn
+                  (princ "\nСистемные переменные возвращены по журналу:")
+                  (foreach rc vars
+                    (princ (strcat "\n  " (KG-AsString (nth 1 rc)) " = "
+                                   (KG-AsString (nth 2 rc))))
+                  )
+                )
+              )
+              ;; 2. имя мастер-версии
+              (setq master (car (KG-JournalRecs "MASTER" recs)))
+              (if master
+                (progn
+                  (setq nm (KG-AsString (nth 1 master)))
+                  (setq h (KG-AsString (nth 2 master)))
+                  (cond
+                    ((= h "") nil)
+                    ((not (KG_EXDefExists h)) nil)
+                    ((KG_EXDefExists nm)
+                     (princ (strcat "\nИмя \"" nm "\" уже занято -- "
+                                    "определение \"" h "\" оставлено.")))
+                    (t
+                      (if (KG-Safe '(lambda () (KG-RestoreMasterName
+                                                 (cons nm h))) nil)
+                        (princ (strcat "\nИмя \"" nm "\" возвращено из "
+                                       "временного \"" h "\"."))
+                        (princ (strcat "\nВНИМАНИЕ: имя \"" nm "\" вернуть "
+                                       "не удалось."))
+                      )
+                    )
+                  )
+                )
+              )
+              ;; 3. якорные вложения -- по handle: ename между сессиями не
+              ;; сохраняется. Перед стиранием сверяется группа 2: handle мог
+              ;; достаться другому объекту после правок чертежа.
+              (setq anchors (KG-JournalRecs "ANCHOR" recs))
+              (foreach rc anchors
+                (setq h (KG-AsString (nth 2 rc)))
+                (if (/= h "")
+                  (progn
+                    (setq e (KG-Safe '(lambda () (handent h)) nil))
+                    (if e
+                      (progn
+                        (setq g2 (KG-Safe
+                                   '(lambda () (cdr (assoc 2 (entget e))))
+                                   nil))
+                        (if (and g2 (= (type g2) (type ""))
+                                 (KG-StrEq (KG-AsString g2)
+                                           (KG-AsString (nth 1 rc))))
+                          (progn
+                            (KG-Safe '(lambda () (entdel e)) nil)
+                            (if (KG-IsAnonDynName g2)
+                              (KG-Safe '(lambda () (KG_EXEraseAnonDef g2))
+                                       nil)
+                            )
+                            (setq n (1+ n))
+                          )
+                        )
+                      )
+                    )
+                  )
+                )
+              )
+              (if (> n 0)
+                (princ (strcat "\nСнято временных вложений защиты: "
+                               (itoa n)))
+              )
+              (KG-Safe '(lambda () (vl-file-delete path)) nil)
+              (setq KG-JOURNAL-MINE nil)
+              (princ "\nВосстановление выполнено. Журнал удалён.")
+            )
+            (progn
+              (princ (strcat "\nЖурнал принадлежит другому чертежу (\"" id
+                             "\") -- печатаю и удаляю, восстановить его "
+                             "здесь нельзя:"))
+              (foreach rc recs
+                (princ (strcat "\n  " (KG-JournalEncode rc)))
+              )
+              (KG-Safe '(lambda () (vl-file-delete path)) nil)
+            )
+          )
+        )
+      )
+    )
+  )
+  (setq KG-JOURNAL-MINE nil)
   (princ)
 )
 
@@ -7824,6 +8271,11 @@
   (setvar "CMDECHO" 0)
   (setvar "FILEDIA" 0)
   (setvar "CMDDIA" 0)
+  ;; 71.9: кэш состояний вложенных блоков не переживает начало прогона.
+  (setq KG-SCAN-CACHE nil)
+  ;; 71.9: журнал незавершённой команды. Если команда упадёт жёстко (не
+  ;; через *error*), следующая команда вернёт переменные по этому журналу.
+  (KG-JournalWrite)
 )
 
 ;;;--- RDBCHECK (INTEGRATECHECK, REPDBLOCKCHECK, ПДБЧЕК): скан без изменений (Этап 2) -
@@ -7831,6 +8283,8 @@
 (defun C:RDBCHECK ( / *error* model base scan)
   (defun *error* (m) (KG-ErrorRestore m))
   (vl-load-com)
+  ;; 71.9: сначала -- возврат по журналу прошлого падения, потом свой журнал
+  (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
   (setq model (KG-Safe '(lambda () (KG_DBGetModel)) nil))
   (setq base (getstring t "\nСемейство (например ABC1.01): "))
@@ -7858,6 +8312,8 @@
                  mdl pre preren hsnap nm cln fams fami famn kg-t0)
   (defun *error* (m) (KG-ErrorRestore m) (KG-TimeReport))
   (vl-load-com)
+  ;; 71.9: сначала -- возврат по журналу прошлого падения, потом свой журнал
+  (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
   (KG-TimeReset)
 
@@ -8112,10 +8568,15 @@
           ;; длинного вывода читалось как провал команды, хотя на
           ;; чертёж это не влияет -- остаются лишь неиспользуемые
           ;; определения, которые не видно и которые не мешают.
+          ;; 71.9: KG-CleanupRun теперь возвращает (определения *U-остаток),
+          ;; поэтому «чисто» не печатается, пока висят сиротские *U.
           (princ (strcat "\n=== ИТОГ ОЧИСТКИ: "
-                         (if (> (KG-AsNum cln 0) 0)
+                         (if (or (> (KG-AsNum (car cln) 0) 0)
+                                 (> (KG-AsNum (car (cdr cln)) 0) 0))
                            (strcat "осталось неиспользуемых определений: "
-                                   (itoa (KG-AsNum cln 0))
+                                   (itoa (KG-AsNum (car cln) 0))
+                                   ", сиротских *U: "
+                                   (itoa (KG-AsNum (car (cdr cln)) 0))
                                    ". На чертёж не влияют, снимаются "
                                    "повторным RDBCLEANUP или PURGE.")
                            "чисто, лишнего не осталось")
@@ -8141,6 +8602,8 @@
                      mdl pre preren hsnap nm cln)
   (defun *error* (m) (KG-ErrorRestore m) (KG-TimeReport))
   (vl-load-com)
+  ;; 71.9: сначала -- возврат по журналу прошлого падения, потом свой журнал
+  (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
   (KG-TimeReset)
   (setq KG-VERBOSE nil)
@@ -8177,9 +8640,12 @@
             (progn
               (setq cln (KG-CleanupRun))
               (princ (strcat "\n=== ИТОГ ОЧИСТКИ: "
-                             (if (> (KG-AsNum cln 0) 0)
+                             (if (or (> (KG-AsNum (car cln) 0) 0)
+                                     (> (KG-AsNum (car (cdr cln)) 0) 0))
                                (strcat "осталось неиспользуемых определений: "
-                                       (itoa (KG-AsNum cln 0))
+                                       (itoa (KG-AsNum (car cln) 0))
+                                       ", сиротских *U: "
+                                       (itoa (KG-AsNum (car (cdr cln)) 0))
                                        ". На чертёж не влияют, снимаются повторным RDBCLEANUP или PURGE.")
                                "чисто, лишнего не осталось")
                              " ==="))
@@ -8547,7 +9013,8 @@
 (princ (strcat "\nRepDblock.lsp, сборка " KG-VERSION
                ". Команды: RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE), RDBCHECK (INTEGRATECHECK), RDBDIAG (INTDIAG),"
                " RDBDUMP (INTDUMP), RDBDUMPDEF (INTDUMPDEF), RDBPASTETEST (INTPASTETEST), RDBTESTBED (INTTESTBED),"
-               " RDBDBXTEST (INTDBXTEST), RDBRENAMETEST (INTRENAMETEST), RDBCLEANUP (INTCLEANUP), RDBCOUNT (INTCOUNT),"
+               " RDBDBXTEST (INTDBXTEST), RDBRENAMETEST (INTRENAMETEST), RDBCLEANUP (INTCLEANUP),"
+               " RDBRECOVER (INTRECOVER, ПДБВОССТАНОВЛЕНИЕ), RDBCOUNT (INTCOUNT),"
                " RDBBRIEF (INTBRIEF), RDBERR (INTERR)."
                " Ename определения: tblobjname, tblsearch (-2), "
                "tblsearch (-1), COM. "

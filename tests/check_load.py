@@ -48,6 +48,7 @@ ACAD_PRIMITIVES = [
     "command", "getstring", "getkword", "initget", "wcmatch", "vl-remove-if",
     "vl-remove-if-not", "vl-some", "vl-every", "vl-princ-to-string",
     "vl-string-subst", "make-string", "chr", "atof",
+    "open", "close", "read-line", "write-line", "vl-file-delete",
 ]
 
 
@@ -128,6 +129,7 @@ def main():
         "C:RDBDBXTEST", "C:INTDBXTEST", "C:ПДБТЕСТDBX",
         "C:RDBRENAMETEST", "C:INTRENAMETEST", "C:ПДБТЕСТПЕРЕИМ",
         "C:RDBCLEANUP", "C:INTCLEANUP", "C:ПДБОЧИСТКА",
+        "C:RDBRECOVER", "C:INTRECOVER", "C:ПДБВОССТАНОВЛЕНИЕ",
         "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
         "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
         "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
@@ -148,7 +150,7 @@ def main():
     main_cmds = [
         "RDB", "RDBCHECK", "RDBDIAG", "RDBDUMP", "RDBDUMPDEF",
         "RDBPASTETEST", "RDBTESTBED", "RDBDBXTEST", "RDBRENAMETEST",
-        "RDBCLEANUP", "RDBCOUNT", "RDBBRIEF", "RDBERR"
+        "RDBCLEANUP", "RDBRECOVER", "RDBCOUNT", "RDBBRIEF", "RDBERR"
     ]
     banner_missing = [c for c in main_cmds if c not in banner]
     if not banner:
