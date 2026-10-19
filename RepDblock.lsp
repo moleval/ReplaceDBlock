@@ -225,7 +225,22 @@
 ;; её не трогает. Подробности -- у KG-JournalWrite.
 (if (not (boundp 'KG-JOURNAL-MINE)) (setq KG-JOURNAL-MINE nil))
 
-(setq KG-VERSION "72")
+;; 72.1. Перенос динамических свойств при замене экземпляров стоил 72.7 с
+;; на 100 экземпляров (главный остаток живого прогона 72): KG_EXRestoreDynProps
+;; на КАЖДОЕ сохранённое свойство заново перебирал весь список свойств
+;; экземпляра и спрашивал имя по COM (D*P вызовов). Теперь карта «имя ->
+;; свойство» собирается одним проходом (KG-RMSet/KG-RMCdr), а значения, уже
+;; совпадающие с сохранёнными, не переписываются вовсе (KG-DynValEq): запись
+;; динамического свойства запускает пересборку анонимного представления.
+;;
+;; 72.2. Живой прогон 72.1 на крупном чертеже: перенос свойств всё ещё около
+;; 0.7 с на экземпляр (замена 100 экземпляров -- 80.1 с против 85.7 с в 72).
+;; Карта имён почти ничего не стоит (0.00 с), а куда уходит остальное --
+;; неизвестно: получение списка свойств, чтение текущих значений или сама
+;; запись (она пересобирает анонимное представление блока). Добавлены
+;; суб-замеры «вход», «чтение (работа)», «запись (работа)» и счётчики
+;; «совпало», «записано», «не удалось», «попытки записи», «без пары».
+(setq KG-VERSION "72.2")
 
 (vl-load-com)
 
@@ -249,6 +264,25 @@
 ;; Сравнение строк без учёта регистра; nil трактуется как пустая строка
 (defun KG-StrEq (a b)
   (= (strcase (KG-AsString a)) (strcase (KG-AsString b)))
+)
+
+;; Сравнение значений динамического свойства: текущего в новом экземпляре и
+;; сохранённого у старого. Совпали -- писать не надо: запись свойства
+;; запускает пересборку анонимного представления, а совпадение этого не
+;; требует. nil и незнакомые типы совпадением НЕ считаются -- тогда значение
+;; пишется, как раньше (это безопасный путь). Строки сравниваются без учёта
+;; регистра (AutoCAD и так хранит каноническое написание), числа -- численно.
+;; Чистая функция: живёт в утилитах рядом с KG-StrEq, чтобы стенд исполнял её
+;; без AutoCAD (раздел 8 в тестовом режиме не загружается).
+(defun KG-DynValEq (cur sav)
+  (cond
+    ((or (null cur) (null sav)) nil)
+    ((and (numberp cur) (numberp sav)) (equal cur sav))
+    ((and (= (type cur) 'STR) (= (type sav) 'STR)) (KG-StrEq cur sav))
+    ((and (listp cur) (listp sav)) (equal cur sav))
+    ((and (= (type cur) 'SYM) (= (type sav) 'SYM)) (eq cur sav))
+    (t nil)
+  )
 )
 
 ;;; Число в строку для отчёта.
@@ -7099,54 +7133,136 @@
   )
 )
 
-;; Восстановить динамические свойства верхнего блока
-(defun KG_EXRestoreDynProps (handle dynprops / e obj props p nm val n pnm r vval)
+;; Восстановить динамические свойства верхнего блока.
+;; 72.1. Карта «имя свойства -> объект свойства» собирается ОДНИМ проходом по
+;; списку свойств (P COM-вызовов). Прежний код на КАЖДОЕ сохранённое свойство
+;; заново перебирал весь список и спрашивал имя по COM: D*P вызовов -- в живом
+;; прогоне это дало 72.7 с на 100 экземпляров, главный остаток шага «замена
+;; экземпляров». Поиск в карте -- KG-RMCdr (точный assoc, без учёта регистра
+;; запасным путём). Совпадающие значения не переписываются вовсе (KG-DynValEq):
+;; запись динамического свойства запускает пересборку анонимного представления,
+;; и пропуск ничего не меняющих записей экономит больше, чем один COM-вызов.
+;; 72.2. Суб-замеры внутри переноса: где именно уходит время.
+;; «вход (работа)» -- handent, vla-object и получение списка свойств;
+;; «карта имён» -- построение карты «имя -> свойство» одним проходом;
+;; «значения (работа)» -- весь проход по сохранённым свойствам;
+;; «чтение (работа)» -- чтение текущего значения перед сверкой;
+;; «запись (работа)» -- цепочка попыток записи одного свойства.
+;; Счётчики (это число вызовов, не время): «совпало», «записано»,
+;; «не удалось», «попытки записи» и «без пары» (сохранённому имени
+;; свойства среди текущих не нашлось).
+(defun KG_EXRestoreDynProps (handle dynprops / e obj props p nm val n pnm r vval
+                                            pmap cur curv kg-t0 kg-tr kg-tw)
   (setq n 0)
   (setq e (handent (KG-AsString handle)))
   (if (and e dynprops)
     (progn
+      (setq kg-t0 (KG-SubT0))
       (setq obj (vlax-ename->vla-object e))
       (setq props (vl-catch-all-apply
                     '(lambda () (vlax-invoke obj 'GetDynamicBlockProperties))))
+      (KG-SubT1 "замена: свойства -- вход (работа)" kg-t0)
       (if (and (not (KG-IsErr props)) props)
-        (foreach dp dynprops
-          (setq nm (car dp))
-          (setq val (cdr dp))
-          (setq vval (vl-catch-all-apply '(lambda () (vlax-variant-value val))))
-          (if (or (KG-IsErr vval) (null vval)) (setq vval val))
+        (progn
+          (setq kg-t0 (KG-SubT0))
+          (setq pmap nil)
           (foreach p props
             (setq pnm (vl-catch-all-apply '(lambda () (vla-get-PropertyName p))))
-            (if (and (not (KG-IsErr pnm)) (KG-StrEq pnm nm))
-              (progn
-                ;; 1. Исходный variant (если сохранился)
-                (setq r (vl-catch-all-apply
-                          '(lambda () (vlax-put-property p 'Value val))))
-                ;; 2. Строковый variant (для параметров видимости и текстовых lookup)
-                (if (and (KG-IsErr r) (or (= (type vval) 'STR) (null (type vval))))
-                  (setq r (vl-catch-all-apply
-                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant (KG-AsString vval) vlax-vbString))))))
-                ;; 3. Вещественный variant (для длин, расстояний, углов)
-                (if (and (KG-IsErr r) (= (type vval) 'REAL))
-                  (setq r (vl-catch-all-apply
-                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbDouble))))))
-                ;; 4. Целочисленный variant
-                (if (and (KG-IsErr r) (= (type vval) 'INT))
-                  (setq r (vl-catch-all-apply
-                            '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbLong))))))
-                ;; 5. Автоматический маршалинг vlax-put
-                (if (KG-IsErr r)
-                  (setq r (vl-catch-all-apply
-                            '(lambda () (vlax-put p 'Value vval)))))
-                ;; 6. Прямое распакованное значение
-                (if (KG-IsErr r)
-                  (setq r (vl-catch-all-apply
-                            '(lambda () (vlax-put-property p 'Value vval)))))
-                (if (not (KG-IsErr r))
-                  (setq n (1+ n))
-                )
-              )
+            (if (and (not (KG-IsErr pnm)) (= (type pnm) 'STR) (/= pnm ""))
+              (setq pmap (KG-RMSet pnm p pmap))
             )
           )
+          (KG-SubT1 "замена: свойства -- карта имён" kg-t0)
+          (setq kg-t0 (KG-SubT0))
+          (foreach dp dynprops
+            (setq nm (car dp))
+            (setq val (cdr dp))
+            (setq vval (vl-catch-all-apply '(lambda () (vlax-variant-value val))))
+            (if (or (KG-IsErr vval) (null vval)) (setq vval val))
+            (setq p (KG-RMCdr nm pmap))
+            (if p
+              (progn
+                ;; Текущее значение: нужно и для сверки равенства. Не прочиталось --
+                ;; curv = nil, и тогда пишем, как раньше (безопасный путь).
+                (setq kg-tr (KG-SubT0))
+                (setq cur (vl-catch-all-apply '(lambda () (vlax-get-property p 'Value))))
+                (if (KG-IsErr cur)
+                  (setq curv nil)
+                  (progn
+                    (setq curv (vl-catch-all-apply
+                                 '(lambda () (vlax-variant-value cur))))
+                    (if (or (KG-IsErr curv) (null curv)) (setq curv cur))
+                  )
+                )
+                (KG-SubT1 "замена: свойства -- чтение (работа)" kg-tr)
+                (if (KG-DynValEq curv vval)
+                  ;; Совпало -- не пишем вовсе: запись пересобирает анонимное
+                  ;; представление блока, это самая дорогая операция.
+                  (progn
+                    (setq n (1+ n))
+                    (KG-SubAdd "замена: свойства -- совпало" 0)
+                  )
+                  (progn
+                    (setq kg-tw (KG-SubT0))
+                    ;; 1. исходный variant (как раньше)
+                    (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                    (setq r (vl-catch-all-apply
+                              '(lambda () (vlax-put-property p 'Value val))))
+                    ;; 2. строковый variant (для параметров с выбором)
+                    (if (and (KG-IsErr r) (or (= (type vval) 'STR) (null (type vval))))
+                      (progn
+                        (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                        (setq r (vl-catch-all-apply
+                                  '(lambda () (vlax-put-property p 'Value (vlax-make-variant (KG-AsString vval) vlax-vbString)))))
+                      )
+                    )
+                    ;; 3. вещественный variant (для углов и длин)
+                    (if (and (KG-IsErr r) (= (type vval) 'REAL))
+                      (progn
+                        (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                        (setq r (vl-catch-all-apply
+                                  '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbDouble)))))
+                      )
+                    )
+                    ;; 4. целочисленный variant
+                    (if (and (KG-IsErr r) (= (type vval) 'INT))
+                      (progn
+                        (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                        (setq r (vl-catch-all-apply
+                                  '(lambda () (vlax-put-property p 'Value (vlax-make-variant vval vlax-vbLong)))))
+                      )
+                    )
+                    ;; 5. универсальный vlax-put
+                    (if (KG-IsErr r)
+                      (progn
+                        (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                        (setq r (vl-catch-all-apply
+                                  '(lambda () (vlax-put p 'Value vval))))
+                      )
+                    )
+                    ;; 6. последняя повторная попытка
+                    (if (KG-IsErr r)
+                      (progn
+                        (KG-SubAdd "замена: свойства -- попытки записи" 0)
+                        (setq r (vl-catch-all-apply
+                                  '(lambda () (vlax-put-property p 'Value vval))))
+                      )
+                    )
+                    (KG-SubT1 "замена: свойства -- запись (работа)" kg-tw)
+                    (if (not (KG-IsErr r))
+                      (progn
+                        (setq n (1+ n))
+                        (KG-SubAdd "замена: свойства -- записано" 0)
+                      )
+                      (KG-SubAdd "замена: свойства -- не удалось" 0)
+                    )
+                  )
+                )
+              )
+              (KG-SubAdd "замена: свойства -- без пары" 0)
+            )
+          )
+          (KG-SubT1 "замена: свойства -- значения (работа)" kg-t0)
         )
       )
     )
@@ -7154,20 +7270,6 @@
   n
 )
 
-;; Установить состояние видимости вложенного блока внутри экземпляра.
-;;
-;; ПРЕЖНЯЯ ВЕРСИЯ НЕ РАБОТАЛА ВОВСЕ: она делала (vlax-for sub obj) по
-;; вставке. Вставка не перечисляет содержимое своего определения, цикл
-;; не выполнялся ни разу, функция возвращала nil, и «состояние
-;; видимости не установлено во вложенном блоке» печаталось на каждый
-;; экземпляр. Тот же приём, что и у KG-InstanceNestedVisibility:
-;; содержимое обходится через entget, а не через COM.
-;;
-;; Возвращает T (установлено), nil (установить не удалось),
-;; "НЕ НАЙДЕН" (вложенной вставки в представлении нет) или
-;; "НЕТ ПРЕДСТАВЛЕНИЯ" (вставка смотрит на общее определение, писать
-;; туда нельзя). Строковые ответы нужны счётчикам отчёта: по одному
-;; нулю нельзя отличить «нечего было восстанавливать» от «не смогли».
 (defun KG_EXSetNestedVisibility (handle nestedname value / e def sub out r)
   (setq out nil)
   (setq e (KG-Call 'handent (list handle) nil))
