@@ -76,7 +76,11 @@ ACAD_BUILTINS = {
     # dictremove -- удаление записи словаря (глубокое снятие
     # метаданных динамики, сборка 71.8). Работа проверена живым
     # прогоном probe13.
-    "DICTSEARCH", "DICTNEXT", "DICTREMOVE",
+    # dictadd -- добавление записи в словарь: лечение паспортов
+    # представлений (сборка 72.4) собирает словарь заново. Работа
+    # проверена живым прогоном: проба 475 на большом чертеже вылечила
+    # 36 паспортов, проба 476 -- правка ссылки 340 через entmod.
+    "DICTSEARCH", "DICTNEXT", "DICTREMOVE", "DICTADD",
     "HANDENT", "SSGET", "SSADD", "SSDEL", "SSLENGTH", "SSNAME", "SSMEMB",
     "SETVAR", "GETVAR", "NENTSEL", "NENTSELP", "ACAD_STRLSORT",
     # Visual LISP: списки и строки

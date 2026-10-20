@@ -130,6 +130,7 @@ def main():
         "C:RDBRENAMETEST", "C:INTRENAMETEST", "C:ПДБТЕСТПЕРЕИМ",
         "C:RDBCLEANUP", "C:INTCLEANUP", "C:ПДБОЧИСТКА",
         "C:RDBRECOVER", "C:INTRECOVER", "C:ПДБВОССТАНОВЛЕНИЕ",
+        "C:RDBHEAL", "C:INTHEAL", "C:ПДБЛЕЧЕНИЕ",
         "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
         "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
         "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
@@ -150,7 +151,8 @@ def main():
     main_cmds = [
         "RDB", "RDBCHECK", "RDBDIAG", "RDBDUMP", "RDBDUMPDEF",
         "RDBPASTETEST", "RDBTESTBED", "RDBDBXTEST", "RDBRENAMETEST",
-        "RDBCLEANUP", "RDBRECOVER", "RDBCOUNT", "RDBBRIEF", "RDBERR"
+        "RDBCLEANUP", "RDBRECOVER", "RDBHEAL", "RDBCOUNT", "RDBBRIEF",
+        "RDBERR"
     ]
     banner_missing = [c for c in main_cmds if c not in banner]
     if not banner:

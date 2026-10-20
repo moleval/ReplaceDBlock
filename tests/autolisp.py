@@ -637,6 +637,9 @@ class Interpreter:
             return val
         d("read", _read)
         d("vl-load-com", lambda: sym("T"))
+        # gc -- настоящая функция AutoLISP (принудительная сборка мусора).
+        # В стенде собирать нечего: пустой вызов, чтобы код с (gc) грузился.
+        d("gc", lambda: NIL)
 
         # --- арифметика ---
         d("+", lambda *a: _add(a))
@@ -662,6 +665,19 @@ class Interpreter:
 
         d("itoa", _itoa)
         d("atoi", _atoi)
+        # rem/zerop -- стандартные функции AutoLISP; в стенде их не было,
+        # а диагностике сборки 72.3 нужен счёт «каждый N-й» по кругу.
+        d("rem", lambda a, b: a % b)
+        d("zerop", lambda x=NIL: sym("T") if
+          (isinstance(x, (int, float)) and not isinstance(x, bool) and x == 0) else NIL)
+        # logand -- стандартная функция AutoLISP; сборке 72.5 нужна
+        # для разбора флагов записи блока (внешняя ссылка -- биты 4 и 8).
+        def _logand(*a):
+            r = -1
+            for x in a:
+                r &= int(x)
+            return r
+        d("logand", _logand)
         d("rtos", lambda x, *rest: ("%.6f" % float(x)).rstrip("0").rstrip(".")
           if rest and rest[0] == 2 and len(rest) > 1 and rest[1] == 0
           else ("%%.%df" % int(rest[1]) % float(x)) if rest and len(rest) > 1

@@ -171,6 +171,9 @@
 
 (defun KG_DBGetModel () *DB*)
 
+;; 72.5: снимок только вхождений -- в стенде это та же база.
+(defun KG-DBGetInstancesOnly () (KG_DBGetModel))
+
 (defun KG_EXAllDefNames () (DB-DefNames))
 
 (defun KG_EXDefExists (name) (DB-HasDef name))
@@ -4875,17 +4878,20 @@
 )
 
 ;;;---------------------------------------------------------------------------
-;;; T31. Глубокое снятие метаданных динамики (сборка 71.8).
+;;; T31. Паспорта динамики: перепривязка и лечение (сборка 72.4).
 ;;;
 ;;; Определения-кандидаты («~имя» и остатки) PURGE не берёт: на их запись
 ;;; жёстко ссылается rep-data (340) в расширенном словаре вставки.
-;;; KG-CleanupRepStripDeep снимает деревья таких словарей.
+;;; KG-CleanupRepRepoint переводит ссылки 340 на записи действующих
+;;; одноимённых определений -- паспорта живых вставок не снимаются
+;;; (снятие в сборках до 72.4 ломало имя: в Свойствах оставалось «*U462»).
 ;;;
 ;;; Подделки: entget читает «объекты» из T31-ENT (имя . список пар),
-;;; entdel/dictremove пишут в T31-DEL/T31-DICT, tblnext выдаёт строки из
-;;; T31-Q, entnext ходит по цепочке определения. Интерпретатор лишние
-;;; аргументы игнорирует, поэтому подделка entget с одним параметром
-;;; обслуживает и (entget e), и (entget e (list "*")).
+;;; entdel/dictremove пишут в T31-DEL/T31-DICT (перепривязка их не зовёт),
+;;; entmod правит объект в T31-ENT, entmakex/dictadd обслуживают лечение,
+;;; tblnext выдаёт строки из T31-Q, entnext ходит по цепочке определения.
+;;; Интерпретатор лишние аргументы игнорирует, поэтому подделка entget с
+;;; одним параметром обслуживает и (entget e), и (entget e (list "*")).
 ;;;
 ;;; Записи сравниваются через eq (KG-RepMemEq), стражи дерева -- через
 ;;; listp: живая проба probe16 на AutoCAD 2023 показала, что "=" на ename
@@ -4898,7 +4904,7 @@
 )
 
 (defun TEST-RepStrip ()
-  (princ "\n\nT31. Снятие метаданных динамики")
+  (princ "\n\nT31. Перепривязка и лечение паспортов динамики")
 
   ;; 24a. Сравнение записей списком.
   (T-Ok "T31.1 запись найдена в списке"
@@ -4929,67 +4935,159 @@
   (T-Ok "T31.6 без 1005 и 340 ссылки нет"
         (not (KG-RepRefHit "XR3" (list "REC1"))))
 
-  ;; 24c. Дерево словаря: поиск ссылки и снятие.
+  ;; 24c. Дерево словаря: поиск ссылки и перепривязка (не снятие).
   (setq T31-ENT (list
-                  (cons "XD1" (list (cons 0 "DICTIONARY")
+                  (cons "XD1" (list (cons -1 "XD1")
+                                    (cons 0 "DICTIONARY")
                                     (cons 3 "AcDbRepData")
                                     (cons 360 "XR1")
                                     (cons 3 "AcDbAppDataCache")
                                     (cons 360 "XR4")))
-                  (cons "XR1" (list (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
+                  (cons "XR1" (list (cons -1 "XR1")
+                                    (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
                                     (cons 340 "REC1")))
-                  (cons "XR4" (list (cons 0 "XRECORD")))))
+                  (cons "XR4" (list (cons -1 "XR4")
+                                    (cons 0 "XRECORD")))))
   (setq T31-DEL nil T31-DICT nil)
+  (defun entmod (ed / e out p done)
+    (setq e (KG-AsString (cdr (assoc -1 ed))))
+    (setq out nil done nil)
+    (foreach p T31-ENT
+      (if (and (not done) (KG-StrEq (KG-AsString (car p)) e))
+        (progn (setq out (cons (cons (car p) (cdr ed)) out)) (setq done t))
+        (setq out (cons p out))
+      )
+    )
+    (if done (progn (setq T31-ENT (reverse out)) ed) nil)
+  )
   (T-Ok "T31.7 дерево со ссылкой на кандидата распознано"
         (KG-RepTreeHas "XD1" (list "REC1") 0))
   (T-Ok "T31.8 дерево без ссылок на кандидата пропущено"
         (not (KG-RepTreeHas "XD1" (list "REC9") 0)))
-  (T-EqInt "T31.9 снято два объекта дерева"
-           (KG-RepTreeStrip "XD1" 0) 2)
-  (T-Ok "T31.10 оба ребёнка стёрты"
-        (and (KG-RepMemEq "XR1" T31-DEL) (KG-RepMemEq "XR4" T31-DEL)))
-  (T-Ok "T31.11 записи словаря сняты"
-        (and (KG-RepMemEq "XD1|AcDbRepData" T31-DICT)
-             (KG-RepMemEq "XD1|AcDbAppDataCache" T31-DICT)))
+  (T-EqInt "T31.9 перепривязана одна ссылка"
+           (KG-RepTreeRepoint "XD1" (list (cons "REC1" "REC2")) 0) 1)
+  (T-EqStr "T31.10 340 указывает на новую запись"
+           (KG-AsString (cdr (assoc 340 (T31-Entget "XR1")))) "REC2")
+  (T-Ok "T31.11 дерево сохранено: дети и записи на месте"
+        (and (null T31-DEL) (null T31-DICT)
+             (T31-Entget "XR4")
+             (KG-StrEq (KG-AsString (cdr (assoc 3 (T31-Entget "XD1")))) "AcDbRepData")))
 
-  ;; 24d. Полный проход по определению с деревом.
+
+  ;; 24d. Полный проход по определению: ссылка переводится, дерево живо.
   (setq T31-Q (list (list (cons 2 "BLK1"))))
   (setq T31-ENT (list
-                  (cons "E1" (list (cons 0 "INSERT")
+                  (cons "E1" (list (cons -1 "E1")
+                                   (cons 0 "INSERT")
                                    (cons 5 "E1H")
                                    (cons 360 "XD1")))
                   (cons "ENDBLK" (list (cons 0 "ENDBLK")))
-                  (cons "T31BLK" (list (cons 0 "BLOCK")
-                                       (cons 330 "T31REC")))
-                  (cons "XD1" (list (cons 0 "DICTIONARY")
+                  (cons "T31BLK" (list (cons -1 "T31BLK")
+                                       (cons 0 "BLOCK")
+                                       (cons 330 "REC1")))
+                  (cons "BLK1" (list (cons -1 "BLK1")
+                                     (cons 0 "BLOCK")
+                                     (cons 330 "REC2")))
+                  (cons "XD1" (list (cons -1 "XD1")
+                                    (cons 0 "DICTIONARY")
                                     (cons 3 "AcDbRepData")
                                     (cons 360 "XR1")
                                     (cons 3 "AcDbAppDataCache")
                                     (cons 360 "XR4")))
-                  (cons "XR1" (list (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
+                  (cons "XR1" (list (cons -1 "XR1")
+                                    (cons 0 "ACDB_BLOCKREPRESENTATION_DATA")
                                     (cons 340 "REC1")))
-                  (cons "XR4" (list (cons 0 "XRECORD")))))
+                  (cons "XR4" (list (cons -1 "XR4")
+                                    (cons 0 "XRECORD")))))
   (setq T31-DEL nil T31-DICT nil)
   (defun tblnext (t1 / r) (setq r (car T31-Q)) (setq T31-Q (cdr T31-Q)) r)
   (defun tblobjname (t1 n / )
-    (cond ((= n "BLK1") "BLK1")
+    (cond ((= n "~BLK1") "T31BLK")
+          ((= n "BLK1") "BLK1")
           ((= n "T31BLK") "T31BLK")
           (t nil)))
   (defun entnext (e / )
     (cond ((= e "BLK1") "E1") ((= e "E1") "ENDBLK") (t nil)))
-  (T-EqInt "T31.12 полный проход снял объекты дерева"
-           (KG-CleanupRepStripDeep (list "REC1")) 2)
-  (T-Ok "T31.13 ребёнок дерева стёрт в проходе"
-        (KG-RepMemEq "XR1" T31-DEL))
-  (T-Ok "T31.14 запись словаря снята в проходе"
-        (KG-RepMemEq "XD1|AcDbRepData" T31-DICT))
+  (setq T31-R (KG-CleanupRepRepoint (list "~BLK1")))
+  (T-Ok "T31.12 полный проход перепривязал ссылку в одной вставке"
+        (equal T31-R (list 1 1 0)))
+  (T-EqStr "T31.13 340 переведён на запись действующего имени"
+           (KG-AsString (cdr (assoc 340 (T31-Entget "XR1")))) "REC2")
+  (T-Ok "T31.14 дерево не снято и запись словаря на месте"
+        (and (null T31-DEL) (null T31-DICT)
+             (KG-StrEq (KG-AsString (cdr (assoc 3 (T31-Entget "XD1")))) "AcDbRepData")))
+
 
   ;; 24e. Записи кандидатов по именам.
   (T-EqStr "T31.15 запись кандидата найдена по имени"
            (KG-AsString (car (KG-CleanupRepRecords (list "T31BLK"))))
-           "T31REC")
+           "REC1")
   (T-Ok "T31.16 имя без определения пропущено"
         (not (KG-CleanupRepRecords (list "НЕТУ"))))
+
+  ;; 24f. Лечение паспорта: недостающий словарь пишется, здоровый -- нет.
+  (setq T31-ENT (list
+                  (cons "E2" (list (cons -1 "E2")
+                                   (cons 0 "INSERT")
+                                   (cons 5 "E2H")
+                                   (cons 360 "XD2")))
+                  (cons "E3" (list (cons -1 "E3")
+                                   (cons 0 "INSERT")
+                                   (cons 5 "E3H")
+                                   (cons 360 "XD3")))
+                  (cons "XD2" (list (cons -1 "XD2")
+                                    (cons 0 "DICTIONARY")))
+                  (cons "XD3" (list (cons -1 "XD3")
+                                    (cons 0 "DICTIONARY")))
+                  (cons "T31BLK" (list (cons -1 "T31BLK")
+                                       (cons 0 "BLOCK")
+                                       (cons 330 "REC1")))))
+  (defun dictsearch (d key / )
+    (if (and (KG-StrEq key "AcDbBlockRepresentation")
+             (KG-StrEq d "XD3"))
+      (list (cons 3 key) (cons 360 "XRHEALTHY"))
+      nil))
+  (setq T31-MADE-Q (list "NEWSUB" "NEWDAT"))
+  (setq T31-MADE nil T31-DICTADD nil)
+  (defun entmakex (ed / r)
+    (setq r (car T31-MADE-Q))
+    (setq T31-MADE-Q (cdr T31-MADE-Q))
+    (setq T31-MADE (cons (list r (cdr (assoc 0 ed)) (cdr (assoc 340 ed))) T31-MADE))
+    r
+  )
+  (defun dictadd (d k v / )
+    (setq T31-DICTADD (cons (strcat (KG-AsString d) "|" k "|" (KG-AsString v))
+                            T31-DICTADD))
+    T
+  )
+  (T-Ok "T31.17 здоровому паспорту запись не нужна"
+        (not (KG-RepHealWrite "E3" "T31BLK")))
+  (T-Ok "T31.18 недостающий паспорт записан"
+        (KG-RepHealWrite "E2" "T31BLK"))
+  (T-Ok "T31.19 под-словарь и ссылка 340 записаны"
+        (and (equal (car T31-MADE)
+                    (list "NEWDAT" "ACDB_BLOCKREPRESENTATION_DATA" "REC1"))
+             (KG-RepMemEq "NEWSUB|AcDbRepData|NEWDAT" T31-DICTADD)
+             (KG-RepMemEq "XD2|AcDbBlockRepresentation|NEWSUB" T31-DICTADD)))
+  (T-Ok "T31.20 без определения базы паспорт не пишется"
+        (not (KG-RepHealWrite "E2" "НЕТУ")))
+  ;; Возврат подделок чтения к прежнему виду (как в конце T30).
+  (defun dictsearch (el key / ) nil)
+  (defun entmakex (ed / ) nil)
+  (defun dictadd (d k v / ) nil)
+  (defun entmod (ed / e out p done)
+    (setq e (cdr (assoc -1 ed)))
+    (setq out nil done nil)
+    (foreach p DB-ENTDATA
+      (if (and (not done) (FAKE-SameKey (car p) e))
+        (progn (setq out (cons (cons e ed) out)) (setq done t))
+        (setq out (cons p out))
+      )
+    )
+    (if done
+      (progn (setq DB-ENTDATA (reverse out)) ed)
+      nil)
+  )
 )
 
 ;;;---------------------------------------------------------------------------

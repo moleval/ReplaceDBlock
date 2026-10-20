@@ -276,7 +276,10 @@ def dx(*pairs):
 
 ENTGET = {
     "E18A1": dx((5, "18A1"), (0, "INSERT"), (2, "*U63")),
-    "E78BC": dx((5, "78BC"), (0, "INSERT"), (2, "*U63")),
+    "E78BC": dx((5, "78BC"), (0, "INSERT"), (2, "*U63"),
+                (8, "КОНСТРУКЦИИ"), (10, [1250.0, -300.0, 15.0]),
+                (41, 2.0), (42, 2.0), (43, 2.0), (50, 1.5708),
+                (210, [0.0, 0.0, 1.0])),
     "E7B33": dx((5, "7B33"), (0, "INSERT"), (2, "Слои и стили для шаблона")),
     "E6070": dx((5, "6070"), (0, "INSERT"), (2, "*U63")),
     "E625B": dx((5, "625B"), (0, "INSERT"),
@@ -351,6 +354,23 @@ def build_interp():
     interp.define("GetDynamicBlockProperties", lambda o: [])
     interp.define("handent", lambda h: Ename("RECBLOCK")
                   if str(h).upper() == "63" else None)
+
+    # Записи таблицы блоков: у вставок-определений есть ename записи,
+    # а группа 70 несёт флаги (4 -- внешняя ссылка). Пока tblobjname не
+    # был определён, флаги прочитать было нечем.
+    RECS = {}
+
+    def rec_for(name):
+        key = str(name).upper()
+        if key not in RECS:
+            en = Ename("REC" + str(len(RECS) + 1))
+            RECS[key] = en
+            ENTGET[str(en).upper()] = dx(
+                (0, "BLOCK"), (2, name),
+                (70, 4 if key == "ВНЕШНЯЯССЫЛКА" else 0))
+        return RECS[key]
+
+    interp.define("tblobjname", lambda table, name: rec_for(name))
     interp.define("ssget", lambda *a: None)
     return interp
 
@@ -508,10 +528,28 @@ def main():
           "КОНСТРУКЦИИ")
     check("M10 масштаб",
           call(interp, '(KG-CdrCI "sx" (KG-InstanceModel OBJ_FULL EN_FULL))'), 2.0)
-    check("M11 точка вставки из variant, а не из списка",
+    check("M11 точка вставки из группы 10",
           lisp_to_string(call(interp,
               '(KG-CdrCI "pos" (KG-InstanceModel OBJ_FULL EN_FULL))')),
           "(1250.0 -300.0 15.0)")
+    check("M11a поворот из группы 50",
+          call(interp, '(KG-CdrCI "rot" (KG-InstanceModel OBJ_FULL EN_FULL))'),
+          1.5708)
+
+    # Нестандартная нормаль: группа 10 задана в OCS, поэтому геометрия
+    # читается прежним путём через COM (вариант, а не список).
+    ORIG_78BC = ENTGET["E78BC"]
+    ENTGET["E78BC"] = dx((5, "78BC"), (0, "INSERT"), (2, "*U63"),
+                         (8, "0"), (10, [1.0, 2.0, 3.0]),
+                         (210, [0.0, 0.0, -1.0]))
+    check("M11b нестандартная нормаль: точка из COM",
+          lisp_to_string(call(interp,
+              '(KG-CdrCI "pos" (KG-InstanceModel OBJ_FULL EN_FULL))')),
+          "(1250.0 -300.0 15.0)")
+    check("M11c нестандартная нормаль: масштаб из COM",
+          call(interp, '(KG-CdrCI "sx" (KG-InstanceModel OBJ_FULL EN_FULL))'),
+          2.0)
+    ENTGET["E78BC"] = ORIG_78BC
     check("M15 KG-PointValue из variant",
           lisp_to_string(call(interp, "(KG-PointValue VAR3 nil)")), "(1.5 -2.5 3.5)")
     check("M16 KG-PointValue из nil",
@@ -578,6 +616,10 @@ def main():
           "(Комплект КП50 v1.5)")
     check("M24b системные блоки _Oblique и _ArchTick исключены из пользовательских",
           lisp_to_string(call(interp, "(member \"_Oblique\" (KG-UserDefNames *M23*))")),
+          "nil")
+    check("M24c определение с флагом внешней ссылки исключено",
+          lisp_to_string(call(interp,
+              '(member "ВнешняяСсылка" (KG-UserDefNames *M23*))')),
           "nil")
 
     run_deepcopy_checks()
