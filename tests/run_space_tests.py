@@ -248,6 +248,17 @@ ENT_L1 = FakeEnt("6070")
 ENT_L2 = FakeEnt("625B")
 ENT_NESTED = FakeEnt("7A01")
 
+# обратное преобразование ename -> VLA-объект: нужно запасному пути
+# KG-EffNameOfEd, когда у *U-вставки нет паспорта (стенд)
+ENT_BY_ENAME = {
+    "E18A1": ENT_MODEL,
+    "E6070": ENT_L1,
+    "E625B": ENT_L2,
+    "E7A01": ENT_NESTED,
+    "E78BC": ENT_FULL,
+    "E7B33": ENT_BROKEN,
+}
+
 DRAW_TABLE = None   # заполняется после BLOCKS
 DOC = None
 DBX_DOC = None
@@ -293,6 +304,8 @@ ENTGET = {
 PASSED = [0]
 FAILED = [0]
 FAILNAMES = []
+# 72.7: счётчики дорогих COM-вызовов, чтобы проверить фильтр по семье.
+CALLS = {"dyn": 0, "attrs": 0}
 
 
 def check(name, got, want):
@@ -331,6 +344,15 @@ def build_interp():
         return attr(obj, "get_" + str(prop))()
 
     def invoke_method(obj, meth, *args):
+        key = str(meth).upper()
+        # 72.7: фиксируем дорогие вызовы. Подставные объекты этих
+        # методов не имеют; раньше отказ молча превращался в nil.
+        if key == "GETDYNAMICBLOCKPROPERTIES":
+            CALLS["dyn"] += 1
+            return []
+        if key == "GETATTRIBUTES":
+            CALLS["attrs"] += 1
+            return []
         return attr(obj, str(meth))(*args)
 
     interp.define("vlax-get-property", get_property)
@@ -346,6 +368,8 @@ def build_interp():
     # «это строка, а не ename» в Integration.lsp на строке сработал бы)
     interp.define("entget", lambda e: ENTGET.get(str(e).upper()))
     interp.define("vlax-vla-object->ename", lambda o: Ename("E" + o.get_Handle()))
+    interp.define("vlax-ename->vla-object",
+                  lambda e: ENT_BY_ENAME.get(str(e).upper()))
     interp.define("vlax-variant-value",
                   lambda v: v.items if isinstance(v, FakeVariant) else v)
     interp.define("vlax-safearray-get-u-bound", lambda a, d: len(a) - 1)
@@ -550,6 +574,29 @@ def main():
           call(interp, '(KG-CdrCI "sx" (KG-InstanceModel OBJ_FULL EN_FULL))'),
           2.0)
     ENTGET["E78BC"] = ORIG_78BC
+
+    # 72.7: чужая семья не должна читать динамику и вложенную видимость.
+    # Именно на этом падал крупный чертёж: семья 3 читала *U-представление
+    # ригеля семьи 2 (handle 93173).
+    call(interp, '(setq KG-MODEL-FAMILY "Другая семья")')
+    CALLS["dyn"] = 0
+    m = call(interp, "(KG-InstanceModel OBJ_FULL EN_FULL)")
+    check("M11d чужая семья: эффективное имя всё равно прочитано",
+          call(interp, '(KG-CdrCI "eff" (KG-InstanceModel OBJ_FULL EN_FULL))'),
+          "Комплект КП50 v1.4 стойка КП45303-2")
+    check("M11e чужая семья: динамика не читается", CALLS["dyn"], 0)
+    check("M11f чужая семья: dyn-props пуст",
+          call(interp, '(KG-CdrCI "dyn-props" (KG-InstanceModel OBJ_FULL EN_FULL))'),
+          None)
+    check("M11g чужая семья: вложенная видимость пуста",
+          call(interp, '(KG-CdrCI "nested-vis" (KG-InstanceModel OBJ_FULL EN_FULL))'),
+          None)
+
+    call(interp, '(setq KG-MODEL-FAMILY "Комплект КП50")')
+    CALLS["dyn"] = 0
+    m = call(interp, "(KG-InstanceModel OBJ_FULL EN_FULL)")
+    check("M11h своя семья: динамика читается", CALLS["dyn"], 1)
+    call(interp, '(setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS nil)')
     check("M15 KG-PointValue из variant",
           lisp_to_string(call(interp, "(KG-PointValue VAR3 nil)")), "(1.5 -2.5 3.5)")
     check("M16 KG-PointValue из nil",

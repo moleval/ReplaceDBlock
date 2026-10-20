@@ -14,6 +14,7 @@
 ;;;   RDBCLEANUP (INTCLEANUP, ПДБОЧИСТКА)  -- очистка определений прошлой интеграции
 ;;;   RDBCOUNT (INTCOUNT, ПДБСЧЁТ)         -- снимок таблицы блоков: вставок на определение
 ;;;   RDBBRIEF (INTBRIEF, ПДБКРАТКО)       -- короткая выжимка: чем кончилась очистка
+;;;   RDBREPORT (INTREPORT, ПДБОТЧЁТ)      -- полный отчёт последнего прогона без шума PURGE
 ;;;   RDBERR (INTERR, ПДБОШИБКА)           -- короткий отчёт об ошибке (для отправки в чат)
 ;;;   RDBDIAG (INTDIAG, ПДБДИАГ)           -- диагностика чтения чертежа
 ;;;   RDBDBXTEST (INTDBXTEST, ПДБТЕСТDBX)  -- проверка глубокого клонирования (ObjectDBX)
@@ -77,6 +78,18 @@
 ;; Отключается (setq KG-CLEANUP-ERASE-U nil) -- тогда остаётся только
 ;; PURGE, как было в сборке 36.
 (if (not (boundp 'KG-CLEANUP-ERASE-U)) (setq KG-CLEANUP-ERASE-U t))
+
+;; 72.7. Буфер последнего отчёта. Команда RDB печатает отчёт по семьям,
+;; но в журнале AutoCAD он теряется среди сотен строк PURGE. KG-Say и
+;; KG-SayKV складывают те же строки в буфер; RDBREPORT выводит их
+;; отдельно, уже без служебного шума. Буфер сбрасывается в начале RDB.
+(setq KG-REPORT-CAPTURE nil)
+(setq KG-REPORT-BUF nil)
+(setq KG-REPORT-LAST nil)
+(setq KG-REPORT-ALL nil)
+;; 72.7. Диагностика динамических свойств: handle, имя свойства и значение,
+;; которые не удалось записать. Сбрасывается перед каждым семейством.
+(setq KG-DYN-FAIL nil)
 
 ;; 71.8 / 72.4. Перед PURGE перепривязывать у вставок паспорта динамики:
 ;; rep-data (жёсткая ссылка 340 на запись определения) держит
@@ -223,6 +236,18 @@
 ;; (KG-SaveVars).
 (if (not (boundp 'KG-SCAN-CACHE)) (setq KG-SCAN-CACHE nil))
 
+;; 72.7: дорогие свойства вхождения (вложенная видимость, динамика,
+;; аннотативность, атрибуты) нужны только вставкам своей семьи. У чужой
+;; вставки они нигде не используются, а именно на них падал крупный
+;; чертёж: семья 3 читала *U-представление ригеля семьи 2 (handle 93173)
+;; и получала 0xC0000005.
+;; KG-MODEL-FAMILY -- база семьи, для которой свойства читаются;
+;; nil -- читать у всех (диагностика, одиночные вызовы).
+;; KG-MODEL-SKIP-PROPS = t -- не читать дорогие свойства ни у кого
+;; (снимки, где нужны только определения, имена и геометрия).
+(if (not (boundp 'KG-MODEL-FAMILY)) (setq KG-MODEL-FAMILY nil))
+(if (not (boundp 'KG-MODEL-SKIP-PROPS)) (setq KG-MODEL-SKIP-PROPS nil))
+
 ;; 71.9: журнал незавершённой команды. KG-JOURNAL-MINE = t -- журнал ведёт
 ;; ЭТА команда; nil -- в файле лежит улика прошлого падения, и KG-JournalErase
 ;; её не трогает. Подробности -- у KG-JournalWrite.
@@ -258,7 +283,7 @@
 ;;   - промежуточная таблица замеров печатается после каждого семейства,
 ;;     чтобы цифры сделанных семейств не терялись при падении на
 ;;     следующем.
-(setq KG-VERSION "72.5")
+(setq KG-VERSION "72.7")
 
 (vl-load-com)
 
@@ -1045,8 +1070,19 @@
       (KG-StrEq (KG-StripDoSuffix nm) (KG-StripDoSuffix key)))
 )
 
-(defun KG-Say (s) (princ (strcat "\n" s)))
-(defun KG-SayKV (k v) (princ (strcat "\n" (KG-AsString k) ": " (KG-AsString v))))
+(defun KG-Say (s)
+  (if KG-REPORT-CAPTURE
+    (setq KG-REPORT-BUF (cons (KG-AsString s) KG-REPORT-BUF))
+  )
+  (princ (strcat "\n" s))
+)
+(defun KG-SayKV (k v)
+  (if KG-REPORT-CAPTURE
+    (setq KG-REPORT-BUF
+      (cons (strcat (KG-AsString k) ": " (KG-AsString v)) KG-REPORT-BUF))
+  )
+  (princ (strcat "\n" (KG-AsString k) ": " (KG-AsString v)))
+)
 
 (defun KG-VarLabel (v) (strcat "\"" (if v v "") "\""))
 
@@ -4355,6 +4391,11 @@
   (setq created (cdr (assoc "created" rep)))
   (setq replaced (cdr (assoc "replaced" rep)))
 
+  ;; 72.7. Весь отчёт складывается в буфер: после прогона его можно
+  ;; получить командой RDBREPORT, не вылавливая строки в журнале.
+  (setq KG-REPORT-CAPTURE t)
+  (setq KG-REPORT-BUF nil)
+
   (if created
     (progn
       (KG-Say (strcat "Созданы определения вариантов: " (KG-NumStr (length created))))
@@ -4508,17 +4549,25 @@
   (KG-SayKV "Потерь экземпляров" (KG-NumStr (cdr (assoc "lost" val))))
   (KG-SayKV "Предупреждений" (KG-NumStr (length (cdr (assoc "warnings" rep)))))
   (KG-SayKV "Ошибок" (KG-NumStr (length (cdr (assoc "errors" rep)))))
+  (if KG-DYN-FAIL
+    (progn
+      (KG-Say "Динамические свойства, которые не удалось перенести:")
+      (foreach x (reverse KG-DYN-FAIL)
+        (KG-Say (strcat "  handle " (nth 0 x) ", «" (nth 1 x) "» = "
+                        (nth 2 x) " (" (nth 3 x) ")")))
+    )
+  )
 
   (foreach s (cdr (assoc "per-variant" val))
-    (princ (strcat "\n  Вариант " (KG-VarLabel (nth 0 s)) ": ожидалось "
-                   (KG-NumStr (nth 1 s)) ", стало " (KG-NumStr (nth 2 s))
-                   (if (nth 3 s) "  [OK]" "  [РАСХОЖДЕНИЕ]")))
+    (KG-Say (strcat "  Вариант " (KG-VarLabel (nth 0 s)) ": ожидалось "
+                    (KG-NumStr (nth 1 s)) ", стало " (KG-NumStr (nth 2 s))
+                    (if (nth 3 s) "  [OK]" "  [РАСХОЖДЕНИЕ]")))
   )
   (foreach w (cdr (assoc "warnings" rep))
-    (princ (strcat "\nВНИМАНИЕ:\n" w))
+    (KG-Say (strcat "ВНИМАНИЕ:\n" w))
   )
   (foreach s (cdr (assoc "errors" rep))
-    (princ (strcat "\nОШИБКА: " s))
+    (KG-Say (strcat "ОШИБКА: " s))
   )
   (if (cdr (assoc "service-names" val))
     (progn
@@ -4540,8 +4589,8 @@
   (foreach v (cdr (assoc "per-variant" val))
     (if (not (nth 3 v)) (setq bad (1+ (if bad bad 0))))
   )
-  (princ (strcat "\n=== ИТОГ: "
-                 (cond
+  (KG-Say (strcat "=== ИТОГ: "
+                  (cond
                    ((> nerr 0)
                     (strcat "ОШИБКИ (" (itoa nerr) ") -- см. строки выше"))
                    ((> (if bad bad 0) 0)
@@ -4549,8 +4598,17 @@
                    ((> nwarn 0)
                     (strcat "выполнено, есть предупреждения ("
                             (itoa nwarn) ")"))
-                   (t "УСПЕШНО, замечаний нет"))
-                 " ==="))
+                    (t "УСПЕШНО, замечаний нет"))
+                  " ==="))
+
+  ;; 72.7. Сохраняем отчёт по семейству для RDBREPORT. Последний отчёт
+  ;; остаётся в KG-REPORT-LAST, все семейства -- в KG-REPORT-ALL.
+  (setq KG-REPORT-LAST (reverse KG-REPORT-BUF))
+  (setq KG-REPORT-ALL
+    (append KG-REPORT-ALL
+            (list (cons (KG-ReportBase rep) KG-REPORT-LAST))))
+  (setq KG-REPORT-CAPTURE nil)
+  (setq KG-DYN-FAIL nil)
 )
 
 
@@ -4752,7 +4810,7 @@
     (parennames (car (reverse parennames)))
     (plainnames
      ;; Исключаем вложенные детали: мастер -- это корневой блок
-     (setq mdl (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+     (setq mdl (KG-ReadModelNoProps))
      (setq nested-all nil)
      (if mdl
        (foreach nm plainnames
@@ -5402,6 +5460,34 @@
 ;;;      мастер-версия уже ссылается на новые вложенные определения;
 ;;;   5. создаются варианты, заменяются экземпляры, перепривязываются
 ;;;      вложенные вхождения внутри сторонних определений.
+;; 72.7: чтение модели без дорогих свойств. Нужно там, где используются
+;; только определения, имена, handle, пространство и геометрия.
+(defun KG-ReadModelNoProps ( / res)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS t)
+  (setq res (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+  (setq KG-MODEL-SKIP-PROPS nil)
+  res
+)
+
+;; 72.7: чтение модели, в котором дорогие свойства читаются только у
+;; вставок семьи BASE. Чужие вставки остаются в модели без свойств.
+(defun KG-ReadModelFamily (base / res)
+  (setq KG-MODEL-FAMILY base KG-MODEL-SKIP-PROPS nil)
+  (setq res (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+  (setq KG-MODEL-FAMILY nil)
+  res
+)
+
+;; 72.7: снимок только вхождений, без дорогих свойств. Он нужен шагу
+;; перепривязки: топ-level вставка пересоздаётся и читает себя заново,
+;; а вложенные вхождения в него всё равно не попадают.
+(defun KG-ReadInstancesNoProps ( / res)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS t)
+  (setq res (KG-Safe '(lambda () (KG-DBGetInstancesOnly)) nil))
+  (setq KG-MODEL-SKIP-PROPS nil)
+  res
+)
+
 (defun KG-Integrate_Model (base newiter techhandle do-paste / model mastername
                                                 pre renames plan created rep
                                                 deleted val warns errs arrived
@@ -5412,6 +5498,7 @@
                                                 retired keepn grp kg-t0 mdl2)
   (setq errs nil)
   (setq warns nil)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS nil)
   (setq mastername (KG-MakeName base newiter ""))
 
   ;; 1. снимок таблицы блоков ДО любых изменений. Именно по нему потом
@@ -5419,10 +5506,22 @@
   ;;    и «его в файле не было» (добавляем). Снимок, сделанный после
   ;;    переименования, этого различия не даёт.
   (KG-MarkT "снимок чертежа до изменений")
-  ;; Прогон сборки 55: снимок не читался, и команда обрывалась на
-  ;; «неверная функция: T» уже после вставки из буфера, с освобождёнными
-  ;; именами. Отказ снимка -- неполные данные, а не отказ интеграции.
-  (setq model (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+  ;; 72.6: перед первым чтением модели освобождаем VLA-обёртки прошлой
+  ;; семьи. Падение 72.5 на семье 2 случилось на 101-й вставке, хотя то же
+  ;; состояние читалось контролем за несколько секунд до этого: причина --
+  ;; накопленные COM-объекты, а не данные чертежа.
+  (gc)
+  ;; 72.7: в обычном прогоне C:RDB этот снимок не используется. Вставку
+  ;; и освобождение имён уже сделала C:RDB, KG-PRERENAMES задан, а ветка
+  ;; do-paste сюда не заходит. Полное чтение 1233 вставок здесь стоило
+  ;; десятки секунд, и именно на нём падала семья 3 (handle 93173 --
+  ;; *U-представление ригеля семьи 2). Читаем только там, где снимок
+  ;; действительно нужен ветке do-paste.
+  (if (and do-paste (null KG-PRERENAMES))
+    (setq model (KG-ReadModelNoProps))
+    (setq model (list (cons "defs" nil) (cons "insts" nil)
+                      (cons "layouts" nil)))
+  )
   (if (null model)
     (progn
       (princ (strcat "\nВНИМАНИЕ: снимок чертежа не прочитан ("
@@ -5562,10 +5661,9 @@
   ;; 4. модель ПОСЛЕ вставки
   (KG-MarkT "чтение модели после вставки")
   (setq kg-t0 (KG-SubT0))
-  ;; Прогон сборки 55: снимок не читался, и команда обрывалась на
-  ;; «неверная функция: T» уже после вставки из буфера, с освобождёнными
-  ;; именами. Отказ снимка -- неполные данные, а не отказ интеграции.
-  (setq model (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+  ;; 72.7: полное чтение модели нужно только для плана и замены. Дорогие
+  ;; свойства читаем только у вставок своей семьи: чужие в план не входят.
+  (setq model (KG-ReadModelFamily base))
   (if (null model)
     (progn
       (princ (strcat "\nВНИМАНИЕ: снимок чертежа не прочитан ("
@@ -5710,7 +5808,7 @@
       ;; чтением модели. Именно здесь на крупном чертеже падало 0xC0000005.
       (gc)
       (setq kg-t0 (KG-SubT0))
-      (setq mdl2 (KG-Safe '(lambda () (KG-DBGetInstancesOnly)) nil))
+      (setq mdl2 (KG-ReadInstancesNoProps))
       (KG-SubT1 "семья: чтение модели (вложенные)" kg-t0)
       ;; 72.5: снимок содержимого определений -- только DXF. По нему карта
       ;; ссылок строится без повторного обхода (см. KG-RefMapBuild).
@@ -5741,7 +5839,7 @@
       (KG-MarkT "снятие старых определений семейства")
       (gc)
       (setq kg-t0 (KG-SubT0))
-      (setq mdl2 (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (setq mdl2 (KG-ReadModelNoProps))
       (KG-SubT1 "семья: чтение модели (старые)" kg-t0)
       (setq kg-t0 (KG-SubT0))
       (setq retired
@@ -5759,7 +5857,7 @@
       (KG-MarkT "контроль результата")
       (gc)
       (setq kg-t0 (KG-SubT0))
-      (setq mdl2 (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (setq mdl2 (KG-ReadModelNoProps))
       (KG-SubT1 "семья: чтение модели (контроль)" kg-t0)
       (setq val (KG-ValidateIntegration mdl2 base newiter
                    (cdr (assoc "groups" (cdr (assoc "scan" plan))))))
@@ -5846,8 +5944,8 @@
 ;; каждого имени-состояния, и на КАЖДУЮ вставку читалось EffectiveName
 ;; через COM (два COM-вызова). Живой прогон 71.4: шаг «возврат состояний
 ;; вложенных блоков» занял 24.9 с. Теперь обход один на определение, а
-;; COM вызывается только для анонимных представлений и один раз на имя
-;; представления (эффективное имя кэшируется по группе 2).
+;; имя анонимного представления читается из паспорта по DXF (72.6),
+;; без COM; кэш по группе 2 остаётся.
 (defun KG-DefInsertsForKeys (defname keys / e ed o nm out g2 ecache k hits left)
   (setq out nil ecache nil left (length keys))
   (setq e (KG-Safe '(lambda () (KG-DefEnt defname)) nil))
@@ -5869,18 +5967,16 @@
             )
           )
           ;; Анонимное представление: в группе 2 заводское «*U123», а
-          ;; эффективное имя -- родительский блок; читается COM один раз
-          ;; на имя представления.
+          ;; эффективное имя -- родительский блок; читается из паспорта
+          ;; по DXF и кэшируется по группе 2.
           (if (and (null hits) (= (substr g2 1 1) "*"))
             (progn
               (setq nm (cdr (assoc g2 ecache)))
               (if (null nm)
                 (progn
-                  (setq o (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
-                  (setq nm (if o
-                             (KG-AsString
-                               (KG-Safe '(lambda () (KG-EffectiveNameOf o)) ""))
-                             ""))
+                  ;; 72.6: имя -- из паспорта по DXF; VLA-объект нужен
+                  ;; только найденным вставкам (ниже).
+                  (setq nm (KG-EffNameOfEd ed g2 e))
                   (setq ecache (cons (cons g2 nm) ecache))
                 )
               )
@@ -5932,16 +6028,8 @@
           (if (KG-NestedKeyMatch g2 nestedname)
             (setq out (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
             (if (= (substr g2 1 1) "*")
-              (progn
-                (setq obj (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
-                (if obj
-                  (progn
-                    (setq nm (KG-AsString
-                               (KG-Safe '(lambda () (KG-EffectiveNameOf obj))
-                                        "")))
-                    (if (KG-NestedKeyMatch nm nestedname) (setq out obj))
-                  )
-                )
+              (if (KG-NestedKeyMatch (KG-EffNameOfEd ed g2 e) nestedname)
+                (setq out (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
               )
             )
           )
@@ -5963,6 +6051,59 @@
     (KG-AsString (cdr (assoc 2 (entget (vl-catch-all-apply
                                          '(lambda () (vlax-vla-object->ename obj)))))))
     (KG-AsString n)
+  )
+)
+
+
+;; Эффективное имя вставки по DXF. У анонимного представления (*U…)
+;; настоящее имя лежит в паспорте: расширенный словарь вставки ->
+;; AcDbBlockRepresentation -> AcDbRepData -> 340 на запись базового
+;; определения. Тем же путём уже ходит лечение паспортов (KG-RepHealChain),
+;; поэтому отдельного COM-вызова не нужно.
+;;
+;; Проверено на крупном файле: паспорт с именем есть у всех 691 верхней и
+;; 494 вложенных *U-вставок и до замены семьи, и после неё -- COM на
+;; чтении модели не вызывается. Если паспорта нет (старый или
+;; повреждённый файл, стенд), остаётся прежний путь через EffectiveName.
+(defun KG-EffNameOfEd (ed defnm e / d sec sub dat rec r nm o)
+  (setq nm (KG-AsString defnm))
+  (if (and (> (strlen nm) 0) (= (substr nm 1 1) "*"))
+    (progn
+      ;; 360 -- расширенный словарь вставки (первый 360 в entget).
+      (setq d (cdr (assoc 360 ed)))
+      (setq sec (if d
+                  (KG-Safe '(lambda () (dictsearch d "AcDbBlockRepresentation")) nil)))
+      (setq sub (if sec (KG-Safe '(lambda () (cdr (assoc -1 sec))) nil)))
+      (setq dat (if sub
+                  (KG-Safe '(lambda () (cdr (assoc -1 (dictsearch sub "AcDbRepData"))))
+                           nil)))
+      (setq rec (if dat (KG-Safe '(lambda () (cdr (assoc 340 (entget dat)))) nil)))
+      (setq r (if rec (KG-Safe '(lambda () (cdr (assoc 2 (entget rec)))) nil)))
+      (if (and r (/= (KG-AsString r) "") (/= (substr (KG-AsString r) 1 1) "*"))
+        (setq nm (KG-AsString r))
+        ;; Паспорта нет (старый или повреждённый файл) -- прежний путь
+        ;; через COM. В крупном файле паспорт есть у всех *U, поэтому
+        ;; на чтении модели этот вызов не выполняется.
+        (if e
+          (progn
+            (setq o (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
+            (if o
+              (setq nm (KG-AsString (KG-EffectiveNameOf o)))
+            )
+          )
+        )
+      )
+    )
+  )
+  nm
+)
+
+;; То же, когда на руках только ename (одиночные вызовы RDBDIAG).
+(defun KG-EffNameOfEnt (e / ed)
+  (setq ed (KG-Safe '(lambda () (entget e)) nil))
+  (if ed
+    (KG-EffNameOfEd ed (KG-AsString (cdr (assoc 2 ed))) e)
+    ""
   )
 )
 
@@ -6127,7 +6268,16 @@
 ;;; Метки KG-Mark называют поле: при падении команда назовёт его.
 ;;; Печатаются они только при (setq KG-TRACE t) -- иначе на большом
 ;;; чертеже командная строка переполняется и хвост отчёта теряется.
-(defun KG-InstanceModel (obj e / ed h defnm eff sp ip lay out nv kg-t0 nrm rot sx sy sz)
+;; 72.7: нужны ли этому вхождению дорогие COM-свойства.
+;; Чужая семья нужна модели только именем, слоем, точкой и масштабами;
+;; её вложенная видимость и динамика не читаются вовсе.
+(defun KG-InstancePropsWanted (eff)
+  (and (not KG-MODEL-SKIP-PROPS)
+       (or (null KG-MODEL-FAMILY)
+           (KG-IsFamilyName eff KG-MODEL-FAMILY)))
+)
+
+(defun KG-InstanceModel (obj e / ed h defnm eff sp ip lay out nv kg-t0 nrm rot sx sy sz want)
   (setq ed (entget e))
   (setq h (KG-AsString (cdr (assoc 5 ed))))
 
@@ -6135,14 +6285,15 @@
   (setq defnm (KG-AsString (cdr (assoc 2 ed))))
 
   (KG-TraceDetail (strcat "вхождение " h ": эффективное имя"))
-  ;; 72.5: у обычной вставки эффективное имя -- это и есть группа 2.
-  ;; COM остаётся только у анонимного представления (*U…): там группа 2
-  ;; -- служебное имя, а свойства читаются с родителя.
-  (setq eff defnm)
-  (if (and (> (strlen defnm) 0) (= (substr defnm 1 1) "*"))
-    (setq eff (KG-AsString (KG-EffectiveNameOf obj)))
-  )
+  ;; 72.6: у анонимного представления (*U…) настоящее имя берётся из
+  ;; паспорта по DXF (KG-EffNameOfEd), без COM. У обычной вставки это
+  ;; группа 2.
+  (setq eff (KG-EffNameOfEd ed defnm e))
   (if (= eff "") (setq eff defnm))
+  ;; 72.7: решаем один раз на вхождение. Для чужой семьи дорогие
+  ;; COM-вызовы не делаются; поля остаются пустыми, а имя, слой и
+  ;; геометрия читаются как обычно.
+  (setq want (KG-InstancePropsWanted eff))
 
   (KG-TraceDetail (strcat "вхождение " h ": пространство"))
   (setq sp (KG-Safe '(lambda () (KG-SpaceOf e)) nil))
@@ -6196,10 +6347,20 @@
     )
   )
 
-  (KG-TraceDetail (strcat "вхождение " h ": состояния вложенных блоков"))
-  (setq kg-t0 (KG-SubT0))
-  (setq nv (KG-Safe '(lambda () (KG-InstanceNestedVisibility obj)) nil))
-  (KG-SubT1 "модель: вхождение -- вложенные состояния" kg-t0)
+  (if want
+    (progn
+      (KG-TraceDetail (strcat "вхождение " h ": состояния вложенных блоков"))
+      (setq kg-t0 (KG-SubT0))
+      (setq nv (KG-Safe '(lambda () (KG-InstanceNestedVisibility obj eff)) nil))
+      (KG-SubT1 "модель: вхождение -- вложенные состояния" kg-t0)
+    )
+    (progn
+      (setq nv nil)
+      (setq KG-LAST-NESTED-SRC nil)
+      (KG-TraceDetail (strcat "вхождение " h
+                              ": чужая семья, вложенные состояния не читаются"))
+    )
+  )
   (if (not nv) (setq nv nil))
   (setq out (cons (cons "nested-vis-src" (KG-AsString KG-LAST-NESTED-SRC)) out))
   ;; Число прочитанных состояний хранится рядом со списком: по одному
@@ -6208,28 +6369,48 @@
   (setq out (cons (cons "nested-vis-n" (length nv)) out))
   (setq out (cons (cons "nested-vis" nv) out))
 
-  (KG-TraceDetail (strcat "вхождение " h ": динамические свойства"))
-  (setq kg-t0 (KG-SubT0))
-  (setq out (cons (cons "dyn-props"
-                        (KG-Safe '(lambda () (KG-GetDynamicProperties obj)) nil))
-                  out))
-  (KG-SubT1 "модель: вхождение -- динамические свойства" kg-t0)
+  (if want
+    (progn
+      (KG-TraceDetail (strcat "вхождение " h ": динамические свойства"))
+      (setq kg-t0 (KG-SubT0))
+      (setq out (cons (cons "dyn-props"
+                            (KG-Safe '(lambda () (KG-GetDynamicProperties obj)) nil))
+                      out))
+      (KG-SubT1 "модель: вхождение -- динамические свойства" kg-t0)
+    )
+    (progn
+      (KG-TraceDetail (strcat "вхождение " h
+                              ": чужая семья, динамика не читается"))
+      (setq out (cons (cons "dyn-props" nil) out))
+    )
+  )
 
-  (KG-TraceDetail (strcat "вхождение " h ": аннотативность"))
-  (setq out (cons (cons "annotative"
-                        (KG-Safe '(lambda () (KG-GetAnnotativeFlag obj)) nil))
-                  out))
+  (if want
+    (progn
+      (KG-TraceDetail (strcat "вхождение " h ": аннотативность"))
+      (setq out (cons (cons "annotative"
+                            (KG-Safe '(lambda () (KG-GetAnnotativeFlag obj)) nil))
+                      out))
+    )
+    (setq out (cons (cons "annotative" nil) out))
+  )
 
-  (KG-TraceDetail (strcat "вхождение " h ": атрибуты"))
-  (setq out (cons (cons "attrs"
-                        (KG-Safe '(lambda () (KG-GetAttributeValues obj)) nil))
-                  out))
+  (if want
+    (progn
+      (KG-TraceDetail (strcat "вхождение " h ": атрибуты"))
+      (setq out (cons (cons "attrs"
+                            (KG-Safe '(lambda () (KG-GetAttributeValues obj)) nil))
+                      out))
+    )
+    (setq out (cons (cons "attrs" nil) out))
+  )
   out
 )
 
 ;; Все вхождения блоков во всём файле (модель + все листы + определения).
 ;; Возвращает список моделей экземпляров.
-(defun KG-CollectInstances ( / ss i e obj m out skipped nospace iserr msg done total)
+(defun KG-CollectInstances ( / ss i e obj m out skipped nospace iserr msg done total
+                            ed defnm eff wantobj)
   (setq out nil skipped 0 nospace 0)
   (KG-TraceDetail "сбор вхождений блоков")
   (KG-TraceDetail "карта handle -> пространство")
@@ -6241,7 +6422,8 @@
     (repeat (setq i (sslength ss))
       (setq e (ssname ss (setq i (1- i))))
       ;; 72.3: отметка каждые 100 вставок -- по протоколу видно, на какой
-      ;; вставке оборвалось чтение (0xC0000005). Каждые 200 -- (gc).
+      ;; вставке оборвалось чтение (0xC0000005). 72.6: (gc) каждые 50 --
+      ;; падение случалось до первой сборки мусора на 200-й.
       (setq done (1+ done))
       (if (zerop (rem done 100))
         (progn
@@ -6249,7 +6431,7 @@
                            ", handle "
                            (KG-AsString
                              (KG-Safe '(lambda () (cdr (assoc 5 (entget e)))) ""))))
-          (if (zerop (rem done 200)) (gc))
+          (if (zerop (rem done 50)) (gc))
         )
       )
       ;; entget здесь -- вне перехвата: на вхождении, которое не читается,
@@ -6259,7 +6441,29 @@
                               (KG-AsString
                                 (KG-Safe '(lambda () (cdr (assoc 5 (entget e))))
                                          ""))))
-      (setq obj (vl-catch-all-apply '(lambda () (vlax-ename->vla-object e))))
+      ;; 72.7: в режиме семьи VLA-объект создаётся только для своей
+      ;; вставки. Чужой он не нужен: её дорогие свойства не читаются, а
+      ;; именно на такой вставке (handle 93173) падал крупный чертёж.
+      ;; В обычном полном чтении (KG-MODEL-FAMILY = nil) поведение прежнее.
+      (setq wantobj
+        (cond
+          ((not (null KG-MODEL-SKIP-PROPS)) nil)
+          ((null KG-MODEL-FAMILY) t)
+          (t
+            (setq ed (KG-Safe '(lambda () (entget e)) nil))
+            (if ed
+              (progn
+                (setq defnm (KG-AsString (cdr (assoc 2 ed))))
+                (setq eff (KG-Safe '(lambda () (KG-EffNameOfEd ed defnm e)) ""))
+                (if (= (KG-AsString eff) "")
+                  t
+                  (KG-InstancePropsWanted eff)))
+              t))
+        )
+      )
+      (setq obj (if wantobj
+                  (vl-catch-all-apply '(lambda () (vlax-ename->vla-object e)))
+                  nil))
       ;; Метки ПОСЛЕ каждого этапа. В прогоне сборки 48 команда упала с
       ;; «неверная функция: T», а последним напечатанным шагом был
       ;; «вхождение ...: динамические свойства» -- то есть метка, которая
@@ -6270,8 +6474,10 @@
       ;; живого vla-объекта в AutoCAD сам бросает ошибку, а метка стоит
       ;; вне перехвата -- так приборка сама уронила бы команду.
       (KG-TraceDetail (strcat "вхождение получено как объект: "
-                              (if (KG-Safe '(lambda () (KG-IsErr obj)) nil)
-                                "ОШИБКА" "да")))
+                              (cond
+                                ((null obj) "не нужен")
+                                ((KG-Safe '(lambda () (KG-IsErr obj)) nil) "ОШИБКА")
+                                (t "да"))))
       ;; ошибка на одном вхождении не должна обрывать обработку остальных,
       ;; но причину нужно видеть: без неё «не удалось прочитать» бесполезно
       (setq m (if (KG-IsErr obj) obj
@@ -6436,11 +6642,7 @@
       (setq ed (KG-Safe '(lambda () (entget e)) nil))
       (setq eff "")
       (if ed
-        (setq eff (KG-AsString
-                    (KG-Safe
-                      '(lambda ()
-                         (KG-EffectiveNameOf (vlax-ename->vla-object e)))
-                      ""))))
+        (setq eff (KG-EffNameOfEd ed (KG-AsString (cdr (assoc 2 ed))) e)))
       (if (= eff "")
         (if ed (setq eff (KG-AsString (cdr (assoc 2 ed))))))
       (setq out (KG-Safe '(lambda () (KG-ParseBlockName eff)) nil))
@@ -6552,33 +6754,55 @@
 ;; состояния есть. Значит, у части блоков параметр назван иначе, и поиск по
 ;; имени его не находил -- состояния не снимались и вернуть их было нечего.
 ;; Пользователь видел ровно это: «состояние сброшено на базовую видимость».
-(defun KG-VisParamName (obj / eff blk d e ed out x)
+(defun KG-VisParamName (obj / eff blk d e ed rec out x)
   (setq out nil)
-  (setq eff (KG-EffectiveNameOf obj))
-  (setq blk (if (and eff (/= eff "")) (KG-BlockObj eff) nil))
+  ;; 72.6: имя вставки -- из паспорта (DXF), BLOCK_RECORD -- по группе 330
+  ;; примитива BLOCK. Раньше на каждое чтение состояния шли три COM-вызова:
+  ;; EffectiveName, vla-Item и vla-object->ename. Словарь ACAD_ENHANCEDBLOCK
+  ;; ищется у той же записи BLOCK_RECORD, что возвращал vla-object->ename.
+  (setq e (KG-Safe '(lambda () (vlax-vla-object->ename obj)) nil))
+  (setq ed (if e (KG-Safe '(lambda () (entget e)) nil) nil))
+  (if ed
+    (setq eff (KG-EffNameOfEd ed (KG-AsString (cdr (assoc 2 ed))) e))
+    (setq eff (KG-EffectiveNameOf obj))
+  )
+  (setq e (if (and eff (/= eff ""))
+            (KG-Safe '(lambda () (KG-DefEnt eff)) nil)
+            nil))
+  (setq ed (if e (KG-Safe '(lambda () (entget e)) nil) nil))
+  (setq rec (if ed (cdr (assoc 330 ed)) nil))
   (setq d nil)
-  (if (and blk (not (KG-IsErr blk)))
+  (if rec
+    (setq d (KG-Safe '(lambda ()
+                        (dictsearch (entget rec) "ACAD_ENHANCEDBLOCK"))
+                     nil))
+    ;; Запасной путь: та же запись BLOCK_RECORD через COM. Нужен, когда
+    ;; KG-DefEnt не нашёл примитив BLOCK (сиротское имя, стенд).
     (progn
-      (setq e (vl-catch-all-apply
-                '(lambda () (vlax-vla-object->ename blk))))
-      (if (not (KG-IsErr e))
+      (setq blk (if (and eff (/= eff ""))
+                  (KG-Safe '(lambda () (KG-BlockObj eff)) nil)
+                  nil))
+      (if (and blk (not (KG-IsErr blk)))
         (progn
-          (setq d (KG-Safe '(lambda ()
-                              (dictsearch (entget e) "ACAD_ENHANCEDBLOCK"))
-                           nil))
-          (if d
-            (progn
-              (setq e (cdr (assoc 360 d)))
-              (if e
-                (progn
-                  (setq ed (KG-Safe '(lambda () (entget e)) nil))
-                  (foreach x ed
-                    (if (and (not out) (KG-StrEq (car x) 301))
-                      (setq out (KG-AsString (cdr x)))
-                    )
-                  )
-                )
-              )
+          (setq e (KG-Safe '(lambda () (vlax-vla-object->ename blk)) nil))
+          (if (and e (not (KG-IsErr e)))
+            (setq d (KG-Safe '(lambda ()
+                                (dictsearch (entget e) "ACAD_ENHANCEDBLOCK"))
+                             nil))
+          )
+        )
+      )
+    )
+  )
+  (if d
+    (progn
+      (setq e (cdr (assoc 360 d)))
+      (if e
+        (progn
+          (setq ed (KG-Safe '(lambda () (entget e)) nil))
+          (foreach x ed
+            (if (and (not out) (KG-StrEq (car x) 301))
+              (setq out (KG-AsString (cdr x)))
             )
           )
         )
@@ -7156,9 +7380,8 @@
 ;;
 ;; 72.5: обход содержимого -- по DXF (entnext/entget), а не vlax-for с
 ;; vla-get-ObjectName: на крупном чертеже это десятки тысяч вызовов
-;; ActiveX на одно чтение модели. Эффективное имя отличается от группы 2
-;; только у анонимного представления (*U…), поэтому COM остаётся ровно
-;; для таких вставок.
+;; ActiveX на одно чтение модели. 72.6: эффективное имя *U-вставки тоже
+;; берётся из паспорта по DXF -- COM в обходе определений больше нет.
 (defun KG-DefNestedRefs (defname / e ed out nm obj r)
   (setq out nil)
   (setq e (KG-Safe '(lambda () (KG-DefEnt defname)) nil))
@@ -7172,16 +7395,8 @@
                            (/= (KG-AsString (cdr (assoc 0 ed))) "ENDBLK"))
                  (if (KG-StrEq (KG-AsString (cdr (assoc 0 ed))) "INSERT")
                    (progn
-                     (setq nm (KG-AsString (cdr (assoc 2 ed))))
-                     (if (and (> (strlen nm) 0) (= (substr nm 1 1) "*"))
-                       (progn
-                         (setq obj (vl-catch-all-apply
-                                     '(lambda () (vlax-ename->vla-object e))))
-                         (if (not (KG-IsErr obj))
-                           (setq nm (KG-AsString (KG-EffectiveNameOf obj)))
-                         )
-                       )
-                     )
+                     ;; 72.6: имя -- из паспорта по DXF, без COM.
+                     (setq nm (KG-EffNameOfEd ed (KG-AsString (cdr (assoc 2 ed))) e))
                      (if (and nm (/= nm "") (not (member nm out)))
                        (setq out (cons nm out))
                      )
@@ -7223,14 +7438,19 @@
 ;; состояниях по умолчанию, и эти состояния лежат в определении. Без
 ;; запасного пути отчёт печатал «Прочитано состояний вложенных блоков:
 ;; 0», и отличить «состояний не было» от «не там искали» было нельзя.
-(defun KG-InstanceNestedVisibility (obj / out en ed def e sub nm v eff)
+(defun KG-InstanceNestedVisibility (obj eff / out en ed def e sub nm v)
   (setq out nil)
   (setq KG-LAST-NESTED-SRC "НЕТ")
   (setq en (KG-Safe '(lambda () (vlax-vla-object->ename obj)) nil))
   (if en
     (progn
       (setq def (KG_DefNameOfEnt en))
-      (setq eff (KG-AsString (KG-EffectiveNameOf obj)))
+      ;; 72.6: вызывающий уже прочитал имя по паспорту (DXF). Одиночные
+      ;; вызовы (RDBDIAG) передают nil -- читаем тем же путём.
+      (if (null eff)
+        (setq eff (KG-EffNameOfEnt en))
+      )
+      (setq eff (KG-AsString eff))
       (KG-TraceDetail (strcat "вложенные состояния: вставка указывает на \""
                        def "\", эффективное имя \"" eff "\""))
       (if (KG-IsAnonDynName def)
@@ -7300,7 +7520,9 @@
                   (setq sub (KG-Safe '(lambda () (vlax-ename->vla-object e)) nil))
                   (if sub
                     (progn
-                      (setq nm (KG-Safe '(lambda () (KG-EffectiveNameOf sub)) nil))
+                      ;; 72.6: имя -- из паспорта (DXF); COM остаётся
+                      ;; только на само состояние видимости.
+                      (setq nm (KG-EffNameOfEd ed (KG-AsString (cdr (assoc 2 ed))) e))
                       (setq v (KG-Safe '(lambda () (KG-GetVisibilityState sub)) nil))
                       (if (and nm v) (setq out (cons (cons nm v) out)))
                     )
@@ -7479,11 +7701,25 @@
   (setq KG-PURGE-ANCHORS nil)
 )
 
+;; 72.7. Сколько в таблице блоков определений каждого вида. Нужно для
+;; одной сводной строки после PURGE: сам PURGE печатает по строке на
+;; каждый удалённый блок, и журнал обрезается. Считаем только имена,
+;; чтобы не читать содержимое определений.
+(defun KG-CountBlockKinds ( / u td nm names)
+  (setq u 0 td 0)
+  (setq names (KG-Safe '(lambda () (KG_EXAllDefNames)) nil))
+  (foreach nm names
+    (if (KG-IsAnonDynName nm) (setq u (1+ u)))
+    (if (KG-IsTempDefName nm) (setq td (1+ td)))
+  )
+  (list u td)
+)
+
 ;; Два прохода AutoCAD PURGE по блокам. Два, а не один: сиротские *U
 ;; держат на себе старые вложенные определения, первый проход снимает
 ;; *U, второй -- освободившееся. Ровно то, что вручную делает двойной
 ;; PURGE, и PURGE в отличие от нас живое представление не тронет.
-(defun KG-CleanupPurgeBlocks ( / n ce mt kg-t0)
+(defun KG-CleanupPurgeBlocks ( / n ce mt kg-t0 k0 k1 u0 t0 u1 t1)
   ;; Ключевые слова с подчёркиванием (_B, _N): без него AutoCAD ждёт
   ;; букву своей локализации, а у пользователя AutoCAD русский.
   ;; Пустого ввода в конце быть не должно: после _N PURGE завершается
@@ -7499,11 +7735,14 @@
   (KG-PurgeAnchorsEnsure)
   (KG-SubT1 "пурге: якорные вложения" kg-t0)
   (setq ce (getvar "CMDECHO"))
-  ;; NOMUTT гасит служебные сообщения PURGE вида «Удаление блок "..."»:
-  ;; на реальном чертеже их больше сотни, и они переполняли журнал.
+  ;; NOMUTT и CMDECHO НЕ подавляют в AutoCAD 2023 вывод самого -PURGE
+  ;; («Удаление блок ...»): это проверено на живом чертеже и на
+  ;; accoreconsole. Настройки оставлены, чтобы не было эха команд, а
+  ;; сводка ниже даёт одну понятную строку вместо сотен.
   (setq mt (getvar "NOMUTT"))
   (setvar "CMDECHO" 0)
   (setvar "NOMUTT" 1)
+  (setq k0 (KG-CountBlockKinds) u0 (car k0) t0 (car (cdr k0)))
   (setq n 0)
   (while (< n 3)
     (setq n (1+ n))
@@ -7513,6 +7752,13 @@
   )
   (setvar "NOMUTT" mt)
   (setvar "CMDECHO" ce)
+  (setq k1 (KG-CountBlockKinds) u1 (car k1) t1 (car (cdr k1)))
+  (if (or (> u0 u1) (> t0 t1))
+    (princ (strcat "\nОчистка: снято блоков «*U...»: "
+                   (itoa (max 0 (- u0 u1)))
+                   ", временных «~...»: "
+                   (itoa (max 0 (- t0 t1)))))
+  )
   t
 )
 
@@ -7841,12 +8087,24 @@
                         (setq n (1+ n))
                         (KG-SubAdd "замена: свойства -- записано" 0)
                       )
-                      (KG-SubAdd "замена: свойства -- не удалось" 0)
+                      (progn
+                        (KG-SubAdd "замена: свойства -- не удалось" 0)
+                        (if (< (length KG-DYN-FAIL) 30)
+                          (setq KG-DYN-FAIL
+                            (cons (list (KG-AsString handle) (KG-AsString nm)
+                                        (KG-AsString vval) "запись")
+                                  KG-DYN-FAIL))))
                     )
                   )
                 )
               )
-              (KG-SubAdd "замена: свойства -- без пары" 0)
+              (progn
+                (KG-SubAdd "замена: свойства -- без пары" 0)
+                (if (< (length KG-DYN-FAIL) 30)
+                  (setq KG-DYN-FAIL
+                    (cons (list (KG-AsString handle) (KG-AsString nm)
+                                (KG-AsString vval) "нет пары")
+                          KG-DYN-FAIL))))
             )
           )
           (KG-SubT1 "замена: свойства -- значения (работа)" kg-t0)
@@ -8679,6 +8937,75 @@
 (defun C:INTBRIEF () (C:RDBBRIEF))
 (defun C:ПДБКРАТКО () (C:RDBBRIEF))
 
+;; 72.7. Полный отчёт последнего прогона без служебного шума. Нужен,
+;; когда журнал AutoCAD обрезан сотнями строк «Удаление блок ...» от PURGE.
+(defun KG-PrintReportBuffer (title / )
+  (if KG-REPORT-ALL
+    (progn
+      (princ (strcat "\n" title " ("
+                     (itoa (length KG-REPORT-ALL)) " сем.) ==="))
+      (foreach pair KG-REPORT-ALL
+        (princ (strcat "\n--- Семейство: " (KG-AsString (car pair)) " ---"))
+        (foreach s (cdr pair) (princ (strcat "\n" s)))
+      )
+    )
+  )
+  (princ)
+)
+(defun C:RDBREPORT ( / )
+  (if (null KG-REPORT-ALL)
+    (princ (strcat "\nОтчёт пока не сохранён: выполните RDB или RDBPICK, "
+                   "затем повторите RDBREPORT."))
+    (KG-PrintReportBuffer "=== ОТЧЁТ ПОСЛЕДНЕГО ПРОГОНА")
+  )
+)
+
+;; 72.7. Копия отчёта в текстовый файл: даже повтор в хвосте F2 может
+;; не поместиться, а файл можно открыть и скопировать целиком.
+(defun KG-ReportFilePath ( / p)
+  (setq p (getvar "DWGPREFIX"))
+  (if (or (null p) (= p ""))
+    (setq p (getvar "TEMPPREFIX"))
+  )
+  (if (or (null p) (= p ""))
+    (setq p ".")
+  )
+  (if (/= (substr p (strlen p) 1) (chr 92))
+    (setq p (strcat p (chr 92)))
+  )
+  (strcat p "RDBREPORT.txt")
+)
+
+(defun KG-WriteReportFile ( / fn f pair s)
+  (if KG-REPORT-ALL
+    (progn
+      (setq fn (KG-ReportFilePath))
+      (setq f (open fn "w"))
+      (if f
+        (progn
+          (write-line (strcat "RepDblock, сборка " KG-VERSION
+                              ", отчёт последнего прогона, семей: "
+                              (itoa (length KG-REPORT-ALL))) f)
+          (foreach pair KG-REPORT-ALL
+            (write-line (strcat "--- Семейство: "
+                                (KG-AsString (car pair)) " ---") f)
+            (foreach s (cdr pair) (write-line s f))
+          )
+          (close f)
+          (princ (strcat "\nОтчёт сохранён в файл: " fn))
+          fn
+        )
+        (progn
+          (princ (strcat "\nНе удалось записать отчёт в файл: " fn))
+          nil
+        )
+      )
+    )
+  )
+)
+(defun C:INTREPORT () (C:RDBREPORT))
+(defun C:ПДБОТЧЁТ () (C:RDBREPORT))
+
 ;;;--- RDBERR (INTERR, ПДБОШИБКА) -------------------------------------------
 ;;; Короткий отчёт об ошибке: 5-8 строк, которые помещаются в сообщение
 ;;; даже когда полный лог не отправить. Печатает последнюю ошибку, шаг,
@@ -9014,6 +9341,7 @@
   ;; 71.9: сначала -- возврат по журналу прошлого падения, потом свой журнал
   (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS nil)
   (setq model (KG-Safe '(lambda () (KG_DBGetModel)) nil))
   (setq base (getstring t "\nСемейство (например ABC1.01): "))
   (if (= base "")
@@ -9044,6 +9372,9 @@
   (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
   (KG-TimeReset)
+  (setq KG-REPORT-ALL nil KG-REPORT-LAST nil
+        KG-REPORT-BUF nil KG-REPORT-CAPTURE nil KG-DYN-FAIL nil)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS nil)
 
   (princ (strcat "\n=== Подмена / интеграция новой итерации семейства (сборка "
                  KG-VERSION ") ==="))
@@ -9096,7 +9427,7 @@
       ;; Снимок может не прочитаться: лучше INTEGRATE продолжится без
       ;; части данных и назовёт причину, чем оборвётся на середине,
       ;; оставив имена освобождёнными.
-      (setq mdl (KG-Safe '(lambda () (KG_DBGetModel)) nil))
+      (setq mdl (KG-ReadModelNoProps))
       (if (null mdl)
         (princ (strcat "\nВНИМАНИЕ: снимок чертежа не прочитан ("
                        (KG-FailText)
@@ -9170,7 +9501,7 @@
           (setq fams (KG-Safe '(lambda ()
                                  (KG-DetectMasterFamilies
                                    KG-ARRIVED
-                                   (KG-Safe '(lambda () (KG_DBGetModel)) nil)))
+                                   (KG-ReadModelNoProps)))
                               nil))
           (setq mastername (KG-DetectMasterName KG-ARRIVED))
           (setq KG-MASTER-STATE
@@ -9191,7 +9522,7 @@
               ;; FB принимает три аргумента: снимок вхождений, снимок
               ;; таблицы блоков и модель.
               (setq fb (KG-FallbackMasterFromDrawing
-                         snap0 beforedefs (KG-Safe '(lambda () (KG_DBGetModel)) nil)))
+                         snap0 beforedefs (KG-ReadModelNoProps)))
               (if (car fb)
                 (progn
                   (setq mastername (nth 1 fb))
@@ -9321,6 +9652,10 @@
     )
   )
   (KG-TimeReport)
+  ;; 72.7. Отчёт ещё раз в самом конце: после очистки журнал забит
+  ;; строками PURGE, а этот повтор остаётся в хвосте и копируется целиком.
+  (KG-PrintReportBuffer "=== ОТЧЁТ ПОСЛЕДНЕГО ПРОГОНА (повтор после очистки)")
+  (KG-WriteReportFile)
   (KG-ErrorRestore nil)
   (princ)
 )
@@ -9339,6 +9674,9 @@
   (KG-Safe '(lambda () (KG-CrashRecover)) nil)
   (KG-SaveVars)
   (KG-TimeReset)
+  (setq KG-REPORT-ALL nil KG-REPORT-LAST nil
+        KG-REPORT-BUF nil KG-REPORT-CAPTURE nil KG-DYN-FAIL nil)
+  (setq KG-MODEL-FAMILY nil KG-MODEL-SKIP-PROPS nil)
   (setq KG-VERBOSE nil)
   (setq KG-KEEPNAMES nil)
   ;; якоря защиты от прошлого прогона, если он падал посреди PURGE
@@ -9389,6 +9727,8 @@
     )
   )
   (KG-TimeReport)
+  (KG-PrintReportBuffer "=== ОТЧЁТ ПОСЛЕДНЕГО ПРОГОНА (повтор после очистки)")
+  (KG-WriteReportFile)
   (KG-ErrorRestore nil)
   (princ)
 )
@@ -9590,7 +9930,7 @@
         (princ "\n  нет")
       )
       (KG-Say "Nested visibility:")
-      (setq nm (KG-InstanceNestedVisibility obj))
+      (setq nm (KG-InstanceNestedVisibility obj nil))
       (if nm
         (foreach p nm
           (princ (strcat "\n  " (KG-AsString (car p)) " = "
@@ -9740,29 +10080,25 @@
 ) ; progn
 ) ; if not KG-TESTING
 
-;; Список команд в баннере обязан совпадать с реально определёнными:
-;; в сборке 19 здесь не было INTDBXTEST, и пользователь не мог понять,
-;; доступна ли команда диагностики.
-(princ (strcat "\nRepDblock.lsp, сборка " KG-VERSION
-               ". Команды: RDB (RepDblock, ПОДМЕНАБЛОКА, ПДБ, INTEGRATE), RDBCHECK (INTEGRATECHECK), RDBDIAG (INTDIAG),"
-               " RDBDUMP (INTDUMP), RDBDUMPDEF (INTDUMPDEF), RDBPASTETEST (INTPASTETEST), RDBTESTBED (INTTESTBED),"
-               " RDBDBXTEST (INTDBXTEST), RDBRENAMETEST (INTRENAMETEST), RDBCLEANUP (INTCLEANUP),"
-               " RDBRECOVER (INTRECOVER, ПДБВОССТАНОВЛЕНИЕ), RDBHEAL (INTHEAL, ПДБЛЕЧЕНИЕ), RDBCOUNT (INTCOUNT),"
-               " RDBBRIEF (INTBRIEF), RDBERR (INTERR)."
-               " Ename определения: tblobjname, tblsearch (-2), "
-               "tblsearch (-1), COM. "
-               " Приборка сбора вхождений, шаг 2. "
-               "RDBBRIEF показывает вставки без определения. "
-               "Отчёт показывает экземпляры семейства "
-               "и сравнивает модель с вставками. "
-                "Отказ не обрывает команду; обход карты помечен каждые 200 объектов. "
-                "Ссылки на прежние имена возвращаются и внутри чужих определений. "
-                "Паспорта динамики перепривязываются, а не снимаются: имя вложенного "
-                "динамического блока разрешается (RDBHEAL лечит старые порчи). "
-                "Видимость вложенных блоков возвращается и определениям без итерации; "
-                "запись проверяется чтением. "
-                "Имя параметра видимости читается из словаря определения, "
-                "а не угадывается по написанию. "
-                "Подробно: (setq KG-TRACE-DETAIL t)."
-               " Порядок прогона: docs/ИНСТРУКЦИЯ_ПРОГОН.md"))
+;; Баннер загрузки: краткое описание и таблица команд.
+;; Один princ: check_load ищет все имена команд в одном блоке.
+(princ
+  (strcat
+    "\nRepDblock.lsp, сборка " KG-VERSION " — подмена динамических блоков."
+    "\nБерёт из буфера новую итерацию семейства и заменяет ею старые вхождения:"
+    "\nсоздаёт варианты, обновляет вложенные определения, возвращает видимость"
+    "\nи динамические свойства, затем чистит старые определения."
+    "\nКоманды: "
+    "\n  +--------------------------------+------------------------------+"
+    "\n  | " (KG-Pad "КОМАНДА" 30) " | " (KG-Pad "ЧТО ДЕЛАЕТ" 28) " |"
+    "\n  +--------------------------------+------------------------------+"
+    "\n  | " (KG-Pad "ПДБ / ПОДМЕНАБЛОКА (RDB)" 30) " | " (KG-Pad "заменить семейство из буфера" 28) " |"
+    "\n  | " (KG-Pad "ПДБВЫБОР (RDBPICK)" 30) " | " (KG-Pad "заменить по выбранному блоку" 28) " |"
+    "\n  | " (KG-Pad "ПДБОЧИСТКА (RDBCLEANUP)" 30) " | " (KG-Pad "очистка старых определений" 28) " |"
+    "\n  | " (KG-Pad "ПДБВОССТАНОВЛЕНИЕ (RDBRECOVER)" 30) " | " (KG-Pad "восстановление после сбоя" 28) " |"
+    "\n  | " (KG-Pad "ПДБЛЕЧЕНИЕ (RDBHEAL)" 30) " | " (KG-Pad "лечение паспортов динамики" 28) " |"
+    "\n  +--------------------------------+------------------------------+"
+    "\n  Подробно: (setq KG-TRACE-DETAIL t)."
+    "\n  Порядок прогона: docs/ИНСТРУКЦИЯ_ПРОГОН.md"
+  ))
 (princ)

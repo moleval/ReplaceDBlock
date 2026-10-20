@@ -133,6 +133,7 @@ def main():
         "C:RDBHEAL", "C:INTHEAL", "C:ПДБЛЕЧЕНИЕ",
         "C:RDBCOUNT", "C:INTCOUNT", "C:ПДБСЧЁТ",
         "C:RDBBRIEF", "C:INTBRIEF", "C:ПДБКРАТКО",
+        "C:RDBREPORT", "C:INTREPORT", "C:ПДБОТЧЁТ",
         "C:RDBERR", "C:INTERR", "C:ПДБОШИБКА"
     ]
     absent = [c for c in cmds if c not in defined]
@@ -149,10 +150,11 @@ def main():
     bend = src.find("))", bstart) if bstart >= 0 else -1
     banner = src[bstart:bend] if bstart >= 0 and bend > bstart else ""
     main_cmds = [
-        "RDB", "RDBCHECK", "RDBDIAG", "RDBDUMP", "RDBDUMPDEF",
-        "RDBPASTETEST", "RDBTESTBED", "RDBDBXTEST", "RDBRENAMETEST",
-        "RDBCLEANUP", "RDBRECOVER", "RDBHEAL", "RDBCOUNT", "RDBBRIEF",
-        "RDBERR"
+        "ПДБ / ПОДМЕНАБЛОКА (RDB)",
+        "ПДБВЫБОР (RDBPICK)",
+        "ПДБОЧИСТКА (RDBCLEANUP)",
+        "ПДБВОССТАНОВЛЕНИЕ (RDBRECOVER)",
+        "ПДБЛЕЧЕНИЕ (RDBHEAL)"
     ]
     banner_missing = [c for c in main_cmds if c not in banner]
     if not banner:
